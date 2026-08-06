@@ -1,0 +1,30 @@
+[
+  {
+    "id": "product-smartphone-x",
+    "title": "Smartphone X 商品知识",
+    "content": "Smartphone X 配备 6.5 英寸 OLED 屏幕和 128GB 存储。种子商品价格为 ¥2999；实时价格与库存必须以商品查询工具返回为准。",
+    "tags": ["手机", "smartphone", "oled", "128gb"],
+    "source": "项目种子商品数据（演示）"
+  },
+  {
+    "id": "product-laptop-pro-14",
+    "title": "Laptop Pro 14 商品知识",
+    "content": "Laptop Pro 14 为 14 英寸笔记本，配置 16GB RAM 和 512GB SSD。种子商品价格为 ¥8999；实时库存请查询商品接口。",
+    "tags": ["电脑", "笔记本", "laptop", "16gb", "512gb"],
+    "source": "项目种子商品数据（演示）"
+  },
+  {
+    "id": "after-sales-cancellation",
+    "title": "订单取消规则",
+    "content": "演示系统仅允许取消待支付订单。取消属于写操作，必须由登录用户在确认卡中再次明确确认；系统会校验订单归属和当前状态。",
+    "tags": ["取消", "订单", "待支付", "确认", "售后"],
+    "source": "项目业务规则（演示）"
+  },
+  {
+    "id": "after-sales-refund",
+    "title": "退款与售后说明",
+    "content": "当前演示项目的退款由管理员端处理。用户可先查询订单状态；退款资格、金额和到账时间应以实际订单与人工审核结果为准，不由 Agent 承诺。",
+    "tags": ["退款", "售后", "管理员", "审核", "refund", "after-sales"],
+    "source": "项目业务规则（演示）"
+  }
+]
