@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="基于工具调用的电商订单智能客服 Agent 演示"
+    />
+    <title>OrderMate · 电商智能客服</title>
+    <link rel="stylesheet" href="/static/styles.css?v=3" />
+    <script src="/static/app.js?v=5" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="控制面板">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">O</div>
+          <div>
+            <strong>OrderMate</strong>
+            <span>Agent Console</span>
+          </div>
+        </div>
+
+        <section class="status-panel" aria-labelledby="system-status-title">
+          <div class="section-label" id="system-status-title">系统状态</div>
+          <div class="status-row">
+            <span>Agent 服务</span>
+            <span class="status-pill" id="agent-status">
+              <i></i><span>检测中</span>
+            </span>
+          </div>
+          <div class="status-row">
+            <span>模型配置</span>
+            <span class="status-value" id="model-status">—</span>
+          </div>
+        </section>
+
+        <section class="login-panel" aria-labelledby="account-title">
+          <div class="section-label" id="account-title">演示账号</div>
+          <form id="login-form">
+            <label>
+              用户名
+              <input
+                id="username"
+                name="username"
+                autocomplete="username"
+                placeholder="testuser"
+                required
+              />
+            </label>
+            <label>
+              密码
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                placeholder="password"
+                required
+              />
+            </label>
+            <button class="secondary-button" type="submit" id="login-button">
+              登录以使用订单工具
+            </button>
+            <button class="demo-account-button" type="button" id="fill-demo-button">
+              填入演示账号
+            </button>
+          </form>
+          <div class="signed-in hidden" id="signed-in">
+            <div>
+              <span class="avatar" aria-hidden="true">✓</span>
+              <div>
+                <strong id="signed-in-name">已登录</strong>
+                <span>订单工具已解锁</span>
+              </div>
+            </div>
+            <button type="button" class="text-button" id="logout-button">退出</button>
+          </div>
+          <p class="form-hint" id="login-hint">
+            演示账号：testuser / password。登录后可查询和取消本人订单。
+          </p>
+        </section>
+
+        <section class="quick-panel" aria-labelledby="quick-title">
+          <div class="section-label" id="quick-title">快速演示</div>
+          <button class="quick-action" data-prompt="推荐 3000 元以内的手机">
+            <span>01</span>商品推荐
+          </button>
+          <button class="quick-action" data-prompt="查看我的购物车">
+            <span>02</span>查看购物车
+          </button>
+          <button class="quick-action" data-prompt="查询我的最近订单">
+            <span>03</span>查询订单
+          </button>
+          <button class="quick-action" data-prompt="取消订单 1">
+            <span>04</span>取消订单演示
+          </button>
+        </section>
+
+        <p class="sidebar-note">
+          写操作始终需要单独确认。模型无法绕过服务端安全边界。
+        </p>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">E-COMMERCE AGENT / LIVE DEMO</span>
+            <h1>智能订单助手</h1>
+          </div>
+          <button class="icon-button" id="clear-button" type="button" title="清空对话">
+            清空
+          </button>
+        </header>
+
+        <section
+          class="conversation"
+          id="conversation"
+          aria-live="polite"
+          aria-label="对话内容"
+        >
+          <article class="message assistant-message">
+            <div class="message-avatar" aria-hidden="true">AI</div>
+            <div class="message-content">
+              <div class="message-meta">OrderMate <span>刚刚</span></div>
+              <div class="message-bubble">
+                <p>
+                  你好，我可以帮你搜索商品、查看购物车和查询本人订单。
+                  取消订单等写操作会在执行前向你确认。
+                </p>
+              </div>
+              <div class="suggestion-row">
+                <button data-prompt="推荐 3000 元以内的手机">推荐商品</button>
+                <button data-prompt="我的订单有哪些？">查询订单</button>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <div class="composer-wrap">
+          <form class="composer" id="chat-form">
+            <textarea
+              id="message-input"
+              rows="1"
+              maxlength="4000"
+              placeholder="输入你的问题，例如：帮我找一款手机…"
+              aria-label="消息"
+              required
+            ></textarea>
+            <button class="send-button" id="send-button" type="submit">
+              <span>发送</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+          </form>
+          <p>Enter 发送 · Shift + Enter 换行 · AI 可能出错，关键操作由服务端校验</p>
+        </div>
+      </main>
+    </div>
+
+    <template id="user-message-template">
+      <article class="message user-message">
+        <div class="message-content">
+          <div class="message-meta">你 <span>刚刚</span></div>
+          <div class="message-bubble"><p></p></div>
+        </div>
+        <div class="message-avatar" aria-hidden="true">你</div>
+      </article>
+    </template>
+
+    <template id="assistant-message-template">
+      <article class="message assistant-message">
+        <div class="message-avatar" aria-hidden="true">AI</div>
+        <div class="message-content">
+          <div class="message-meta">OrderMate <span>刚刚</span></div>
+          <div class="message-bubble"><p></p></div>
+          <div class="reference-bar hidden"></div>
+          <div class="result-list hidden"></div>
+          <div class="tool-trace hidden"></div>
+          <div class="confirmation-card hidden"></div>
+        </div>
+      </article>
+    </template>
+
+    <template id="system-message-template">
+      <article class="message system-message">
+        <div class="system-message-content"><p></p></div>
+      </article>
+    </template>
+  </body>
+</html>

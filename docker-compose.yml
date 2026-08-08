@@ -1,0 +1,77 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_DATABASE: ecommerce_db
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./src/main/resources/sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./src/main/resources/sql/data.sql:/docker-entrypoint-initdb.d/02-data.sql:ro
+      - ./agent-service/sql/setup_single_database.sql:/docker-entrypoint-initdb.d/03-agent-knowledge.sql:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_URL: jdbc:mysql://mysql:3306/ecommerce_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      JWT_SECRET: ${JWT_SECRET:-local-demo-jwt-secret-key-change-before-production-2026-at-least-64-bytes-long}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_HOST_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ./agent-service
+      dockerfile: Dockerfile
+    environment:
+      AGENT_MODE: ${AGENT_MODE:-demo}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      REDIS_URL: ${REDIS_URL:-}
+      ECOMMERCE_BACKEND: api
+      ECOMMERCE_API_BASE_URL: http://backend:8080/api
+      DB_TYPE: mysql
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: agent_user
+      MYSQL_PASSWORD: agent_readonly_123456
+      MYSQL_DATABASE: ecommerce_db
+      REQUEST_TIMEOUT_SECONDS: 20
+      CONVERSATION_MAX_MESSAGES: ${CONVERSATION_MAX_MESSAGES:-12}
+      CONVERSATION_TTL_SECONDS: ${CONVERSATION_TTL_SECONDS:-1800}
+    depends_on:
+      backend:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${AGENT_HOST_PORT:-8000}:8000"
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

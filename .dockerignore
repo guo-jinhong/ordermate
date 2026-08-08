@@ -1,0 +1,15 @@
+.git
+.idea
+.vscode
+.mvn
+target
+agent-service/.venv
+agent-service/.pytest_cache
+agent-service/**/__pycache__
+*.iml
+*.log
+.env
+.run
+*.db
+*.sqlite
+*.sqlite3
