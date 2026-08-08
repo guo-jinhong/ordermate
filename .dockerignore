@@ -9,3 +9,7 @@ agent-service/**/__pycache__
 *.iml
 *.log
 .env
+.run
+*.db
+*.sqlite
+*.sqlite3

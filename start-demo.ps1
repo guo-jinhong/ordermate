@@ -41,6 +41,8 @@ Invoke-Compose up --build -d
 Write-Host ""
 Invoke-Compose ps
 Write-Host ""
-Write-Host "Open http://localhost:18000 after the services become ready." -ForegroundColor Green
+$agentPortLine = Invoke-Compose port agent 8000 | Select-Object -First 1
+$agentPort = if ($agentPortLine -match ':(\d+)$') { $Matches[1] } else { "8000" }
+Write-Host "Open http://localhost:$agentPort after the services become ready." -ForegroundColor Green
 Write-Host "Demo account: testuser / password"
 Write-Host "The first build may take several minutes to download images and dependencies."

@@ -249,6 +249,14 @@ class DemoAgentService:
             )
 
         if self._contains_any(lowered, "加入购物车", "加购物车", "放购物车", "添加购物车", "add to cart"):
+            if not access_token:
+                return await self._run_tool(
+                    "get_cart",
+                    {},
+                    session_id=session_id,
+                    access_token=access_token,
+                    success_prefix="请先登录后再添加商品到购物车。",
+                )
             product_id, clarification = _resolve_or_clarify_product_id(message, lowered, state)
             quantity = self._extract_quantity(lowered)
             if clarification:
@@ -342,10 +350,16 @@ class DemoAgentService:
             )
 
         if self._contains_any(
-            lowered, "推荐", "商品", "手机", "电脑", "耳机", "搜索", "找", "库存", "价格", "多少钱", "find", "product"
+            lowered, "推荐", "商品", "手机", "电脑", "耳机", "搜索", "找", "库存", "有货", "价格", "多少钱", "find", "product"
         ):
             list_all_products = self._contains_any(
-                lowered, "有哪些商品", "商品列表", "所有商品", "有什么商品"
+                lowered,
+                "有哪些商品",
+                "商品列表",
+                "所有商品",
+                "有什么商品",
+                "推荐一些商品",
+                "推荐商品",
             )
             explicit_keyword = self._extract_product_keyword(lowered)
             explicit_product_id = self._extract_product_id(lowered)
@@ -386,6 +400,7 @@ class DemoAgentService:
             return await self._search_products(
                 keyword, lowered, state, session_id, access_token,
                 reference=ref,
+                state_keyword=explicit_keyword or keyword,
                 min_price=min_price,
                 max_price=max_price,
                 in_stock=in_stock,
@@ -506,6 +521,7 @@ class DemoAgentService:
         access_token: str | None,
         *,
         reference: ReferenceResolution | None = None,
+        state_keyword: str | None = None,
         exclude_shown: bool = False,
         min_price: float | None = None,
         max_price: float | None = None,
@@ -545,13 +561,16 @@ class DemoAgentService:
         if products:
             first = products[0]
             state.record_product_search(
-                keyword,
+                state_keyword if state_keyword is not None else keyword,
                 int(first["id"]) if first.get("id") is not None else None,
                 str(first.get("name") or ""),
                 shown_ids,
             )
         else:
-            state.record_product_search(keyword, shown_product_ids=state.shown_product_ids)
+            state.record_product_search(
+                state_keyword if state_keyword is not None else keyword,
+                shown_product_ids=state.shown_product_ids,
+            )
         answer = (
             "没有更多符合条件的商品了。"
             if exclude_shown and not products

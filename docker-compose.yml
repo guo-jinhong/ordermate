@@ -52,6 +52,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      REDIS_URL: ${REDIS_URL:-}
       ECOMMERCE_BACKEND: api
       ECOMMERCE_API_BASE_URL: http://backend:8080/api
       DB_TYPE: mysql

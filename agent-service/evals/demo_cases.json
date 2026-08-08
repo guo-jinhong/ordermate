@@ -7,7 +7,7 @@
   {"name":"price_range_max","message":"找3000元以内的耳机","authenticated":false,"expect":{"tool":"search_products","outcome":"success","contains":"耳机"}},
   {"name":"in_stock_filter","message":"现在有什么手机有货","authenticated":false,"expect":{"tool":"search_products","outcome":"success","contains":"手机"}},
   {"name":"price_range_both","message":"推荐2000到5000之间的耳机","authenticated":false,"expect":{"tool":"search_products","outcome":"success","contains":"耳机"}},
-  {"name":"no_match_budget","message":"推荐100元以下的笔记本电脑","authenticated":false,"expect":{"tool":"search_products","outcome":"success","contains":"笔记本"}},
+  {"name":"no_match_budget","message":"推荐100元以下的笔记本电脑","authenticated":false,"expect":{"tool":"search_products","outcome":"success","contains":"没有找到"}},
   {"name":"stock_check","message":"华为Mate X5有货吗","authenticated":false,"expect":{"tool":"search_products","outcome":"success"}},
   {"name":"cart_requires_login","message":"加入购物车","authenticated":false,"expect":{"tool":"get_cart","outcome":"error","contains":"登录"}},
   {"name":"empty_search_keyword","message":"推荐一些商品","authenticated":false,"expect":{"tool":"search_products","outcome":"success"}}

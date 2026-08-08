@@ -19,7 +19,7 @@ The frontend chat page calls the Agent service first. The Agent service then cal
 ```mermaid
 flowchart LR
     U["User / Browser"] --> A["FastAPI Agent service"]
-    A --> R["Redis memory and confirmation tokens"]
+    A -.->|"optional when REDIS_URL is configured"| R["Redis memory and confirmation tokens"]
     A --> K["Local knowledge base"]
     A --> L["LLM API or demo agent"]
     A --> B["Spring Boot e-commerce API"]
@@ -435,7 +435,7 @@ When explaining this API design in an interview, use this structure:
 
 1. The Java service owns business data and transactional operations.
 2. The Agent service owns conversation, tool orchestration, memory, and safety confirmation.
-3. Redis stores short-term memory, structured conversation state, and pending confirmation tokens.
+3. Process memory stores conversation state by default; Redis stores short-term memory, structured state, and pending confirmation tokens only when `REDIS_URL` is configured.
 4. MySQL stores durable e-commerce data such as users, products, carts, and orders.
 5. SSE is used for chat timeline streaming, while normal JSON APIs are used for login, confirmation, and backend business operations.
 6. Risky write operations are not executed directly by the model. The Agent first creates a confirmation token, then executes only after the user approves.

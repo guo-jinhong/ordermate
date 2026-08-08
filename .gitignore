@@ -38,6 +38,11 @@ build/
 .DS_Store
 *.log
 *.log.*
+.run/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
 out/
 .metadata/
 .classpath

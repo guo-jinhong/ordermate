@@ -18,6 +18,7 @@ class EvalEcommerce:
         min_price: float | None = None,
         max_price: float | None = None,
         in_stock: bool | None = None,
+        created_after: str | None = None,
     ):
         products = [
             {"id": 1, "name": "入门手机", "price": 1999, "stock": 10, "categoryId": 101},

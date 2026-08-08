@@ -115,7 +115,7 @@ class OrderServiceTest {
 
         CreateOrderDTO request = CreateOrderDTO.builder()
                 .addressId(1L).paymentMethod("ALIPAY")
-                .items(List.of(OrderItemDTO.builder().productId(10L).quantity(999).build()))
+                .items(List.of(OrderItemDTO.builder().productId(10L).quantity(11).build()))
                 .build();
 
         assertThatThrownBy(() -> orderService.createOrder(1L, request))

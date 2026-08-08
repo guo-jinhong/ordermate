@@ -1,428 +1,137 @@
-# Deployment Guide
+# OrderMate 部署指南
 
-## 1. Deployment Goal
+## 部署组成
 
-This project can be deployed as four services:
-
-```text
-MySQL 8.0
-Redis Stack Server
-Spring Boot e-commerce backend
-FastAPI Agent service and chat frontend
-```
-
-Local demo target:
+默认 Docker Compose 启动三个服务：
 
 ```text
-http://localhost:8000          Chat page
-http://localhost:8000/docs     Agent API docs
-http://localhost:8080/api/doc.html  Java API docs
+mysql   MySQL 8
+backend Spring Boot
+agent   FastAPI Agent 与聊天前端
 ```
 
-Production target:
+Redis 是可选外部依赖，默认 Compose 不启动。只有配置 `REDIS_URL` 后才启用会话和检查点持久化。
 
-```text
-https://your-domain.com        Chat page and Agent API
-https://api.your-domain.com    Java backend API, optional
-```
+## 本地 Docker 部署
 
-## 2. Local Docker Deployment
-
-### 2.1 Prerequisites
-
-Install and start Docker Desktop.
-
-You do not need to install these manually for the Docker demo:
-
-- MySQL
-- Redis
-- Maven
-- Python
-- Java runtime
-
-### 2.2 Start All Services
-
-Run from the project root:
+前置条件：Docker Desktop 或 Linux Docker Engine + Compose v2。
 
 ```powershell
 docker compose up --build -d
-```
-
-If your local Docker installation uses standalone Compose, use:
-
-```powershell
-docker-compose up --build -d
-```
-
-Or use the helper script:
-
-```powershell
-.\start-demo.ps1
-```
-
-### 2.3 Check Service Status
-
-```powershell
 docker compose ps
 ```
 
-Or:
+默认端口：
 
-```powershell
-docker-compose ps
-```
+| 服务 | 容器端口 | 主机端口 |
+| --- | ---: | ---: |
+| MySQL | 3306 | 3307 |
+| Java backend | 8080 | 8080 |
+| Agent | 8000 | 8000 |
 
-Expected services:
+访问：
 
-```text
-redis
-mysql
-backend
-agent
-```
+- <http://localhost:8000>
+- <http://localhost:8000/docs>
+- <http://localhost:8080/api/doc.html>
 
-### 2.4 Open the Demo
-
-```text
-Chat page:       http://localhost:8000
-Agent docs:      http://localhost:8000/docs
-Java API docs:   http://localhost:8080/api/doc.html
-```
-
-Demo account:
-
-```text
-username: testuser
-password: password
-```
-
-### 2.5 Stop Services
+停止但保留数据：
 
 ```powershell
 docker compose down
 ```
 
-Or:
-
-```powershell
-.\stop-demo.ps1
-```
-
-### 2.6 Reset Demo Data
-
-Reset only the demo order data:
-
-```powershell
-.\reset-demo.ps1
-```
-
-Delete all container data and recreate MySQL seed data:
+删除数据库卷并重新初始化：
 
 ```powershell
 docker compose down -v
 docker compose up --build -d
 ```
 
-## 3. Docker Compose Services
+> `down -v` 是破坏性操作，只能用于确认可以丢弃数据的演示环境。
 
-### 3.1 MySQL
+## 环境变量
 
-Container image:
-
-```text
-mysql:8.0
-```
-
-Host port:
-
-```text
-3307 -> 3306
-```
-
-Initialization scripts:
-
-```text
-src/main/resources/sql/schema.sql
-src/main/resources/sql/data.sql
-```
-
-Data volume:
-
-```text
-mysql-data
-```
-
-### 3.2 Redis
-
-Container image:
-
-```text
-redis/redis-stack-server:latest
-```
-
-Data volume:
-
-```text
-redis-data
-```
-
-Used for:
-
-- Conversation memory
-- Structured conversation state
-- Confirmation tokens
-- LangGraph workflow checkpointer
-
-### 3.3 Spring Boot Backend
-
-Host port:
-
-```text
-8080 -> 8080
-```
-
-Important environment variables:
-
-```dotenv
-SPRING_PROFILES_ACTIVE=prod
-DB_URL=jdbc:mysql://mysql:3306/ecommerce_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
-DB_USERNAME=root
-DB_PASSWORD=123456
-JWT_SECRET=change-this-in-production
-```
-
-### 3.4 FastAPI Agent
-
-Host port:
-
-```text
-8000 -> 8000
-```
-
-Important environment variables:
-
-```dotenv
-AGENT_MODE=demo
-ECOMMERCE_API_BASE_URL=http://backend:8080/api
-REDIS_URL=redis://redis:6379/0
-CONVERSATION_MAX_MESSAGES=12
-CONVERSATION_TTL_SECONDS=1800
-REQUEST_TIMEOUT_SECONDS=20
-```
-
-## 4. Environment Variables
-
-Create `.env` from the example file:
+复制示例：
 
 ```powershell
 Copy-Item .env.docker.example .env
 ```
 
-Recommended local demo configuration:
+| 变量 | 默认值 | 生产要求 |
+| --- | --- | --- |
+| `MYSQL_ROOT_PASSWORD` | `123456` | 必须换成强密码 |
+| `JWT_SECRET` | 本地演示值 | 必须换成长随机值 |
+| `BACKEND_HOST_PORT` | `8080` | 通常不直接公网开放 |
+| `AGENT_HOST_PORT` | `8000` | 由反向代理访问 |
+| `AGENT_MODE` | `demo` | 按需求选择 demo/live |
+| `OPENAI_API_KEY` | 空 | live 模式必填且不得提交 |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | 填写供应商当前可用模型名 |
+| `OPENAI_BASE_URL` | 空 | DeepSeek 可使用兼容 API 地址 |
+| `REDIS_URL` | 空 | 可选，必须能从 Agent 容器访问 |
+| `CORS_ALLOWED_ORIGINS` | 空 | 生产 Java 服务必须配置明确域名 |
 
-```dotenv
-AGENT_MODE=demo
-MYSQL_ROOT_PASSWORD=123456
-JWT_SECRET=local-demo-jwt-secret-key-change-before-production-2026-at-least-64-bytes-long
-BACKEND_HOST_PORT=8080
-AGENT_HOST_PORT=8000
-```
-
-Recommended live model configuration:
+DeepSeek live 示例：
 
 ```dotenv
 AGENT_MODE=live
-OPENAI_API_KEY=your-api-key
-OPENAI_MODEL=gpt-5.4-mini
-OPENAI_BASE_URL=
+OPENAI_API_KEY=真实Key
+OPENAI_MODEL=供应商当前支持的模型名
+OPENAI_BASE_URL=https://api.deepseek.com
 ```
 
-Never commit `.env` to Git.
+不要把文档中的示例模型名当成长期固定值。上线前应以模型供应商控制台和 API 文档为准。
 
-## 5. Demo Mode vs Live Mode
-
-| Mode | Model API Required | Usage |
-| --- | --- | --- |
-| `demo` | No | Stable local interview demo |
-| `live` | Yes | Real LLM tool-calling behavior |
-| `auto` | Optional | Use live when API key exists, otherwise demo |
-
-For interviews, use `demo` first to avoid network or API-key issues. If the interviewer asks about real LLM integration, switch to `live` and explain the environment variables.
-
-## 6. Local Verification
-
-### 6.1 Verify Agent Health
+## 本地验证
 
 ```powershell
-curl http://localhost:8000/health
+docker compose config --services
+docker compose ps
+Invoke-RestMethod http://localhost:8000/health
 ```
 
-Expected:
-
-```json
-{
-  "status": "ok",
-  "agent_mode": "demo"
-}
-```
-
-### 6.2 Verify Login
+登录测试：
 
 ```powershell
-curl -X POST http://localhost:8000/auth/login `
-  -H "Content-Type: application/json" `
-  -d "{\"username\":\"testuser\",\"password\":\"password\"}"
+$body = @{username='testuser'; password='password'} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/auth/login -ContentType application/json -Body $body
 ```
 
-### 6.3 Verify Chat
+日志：
 
 ```powershell
-curl -X POST http://localhost:8000/chat `
-  -H "Content-Type: application/json" `
-  -d "{\"message\":\"推荐 3000 元以内的手机\",\"session_id\":\"demo-session\"}"
+docker compose logs --tail 200 backend
+docker compose logs --tail 200 agent
+docker compose logs --tail 200 mysql
 ```
 
-### 6.4 Verify Streaming Chat
+## 云服务器部署
 
-Use the browser chat page at:
-
-```text
-http://localhost:8000
-```
-
-Or use an API tool that supports event streams.
-
-## 7. Run Tests
-
-### 7.1 Java Tests
-
-```powershell
-.\mvnw.cmd test
-```
-
-### 7.2 Python Agent Tests
-
-```powershell
-cd agent-service
-python -m pytest -q
-```
-
-If you use a virtual environment:
-
-```powershell
-cd agent-service
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest -q
-```
-
-## 8. Cloud Server Deployment
-
-### 8.1 Buy a Server
-
-Recommended minimum configuration for demo:
-
-```text
-2 CPU
-4 GB RAM
-40 GB disk
-Ubuntu 22.04 or 24.04
-```
-
-Open security group ports:
-
-```text
-22    SSH
-80    HTTP
-443   HTTPS
-8000  Optional direct Agent access during debugging
-8080  Optional direct Java access during debugging
-```
-
-For production, expose only `80` and `443`; keep `8000`, `8080`, `3307`, and Redis closed to the public internet.
-
-### 8.2 Install Docker
-
-On Ubuntu:
+建议最低演示配置：2 vCPU、4 GB 内存、40 GB 磁盘。服务器安装 Git、Docker Engine 和 Compose v2。
 
 ```bash
-sudo apt update
-sudo apt install -y ca-certificates curl gnupg git
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER
-```
-
-Log out and log in again, then check:
-
-```bash
-docker --version
-docker compose version
-```
-
-### 8.3 Upload or Clone Project
-
-```bash
-git clone <your-repo-url>
-cd ecommerce-order-system-memory
-```
-
-Create `.env`:
-
-```bash
+git clone https://github.com/guo-jinhong/ordermate.git
+cd ordermate
 cp .env.docker.example .env
-```
-
-Edit secrets:
-
-```bash
 nano .env
-```
-
-At minimum, change:
-
-```dotenv
-MYSQL_ROOT_PASSWORD=change-this
-JWT_SECRET=change-this-to-a-long-random-secret
-AGENT_MODE=demo
-```
-
-### 8.4 Start Services
-
-```bash
 docker compose up --build -d
 docker compose ps
 ```
 
-Check logs:
+安全组建议：
 
-```bash
-docker compose logs -f backend
-docker compose logs -f agent
-```
+- 开放 80/443。
+- SSH 22 仅允许可信来源。
+- 不开放 3307、Redis、8000、8080；由反向代理访问应用。
 
-## 9. Nginx Reverse Proxy
+## Nginx 与 SSE
 
-### 9.1 Install Nginx
-
-```bash
-sudo apt install -y nginx
-```
-
-### 9.2 Proxy Agent Service
-
-Create:
-
-```bash
-sudo nano /etc/nginx/sites-available/ordermate.conf
-```
-
-Example config:
+示例 `/etc/nginx/sites-available/ordermate.conf`：
 
 ```nginx
 server {
     listen 80;
-    server_name your-domain.com;
+    server_name your-domain.example;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -431,172 +140,104 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-
         proxy_buffering off;
         proxy_cache off;
+        proxy_read_timeout 300s;
     }
 }
 ```
 
-Enable:
+验证并加载：
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/ordermate.conf /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Important for SSE:
+SSE 需要关闭代理缓冲，并给予足够读取超时。
 
-- `proxy_buffering off`
-- `proxy_cache off`
-- Keep the Agent endpoint as streaming response with `text/event-stream`.
+## HTTPS
 
-## 10. HTTPS
-
-If you have a domain:
+以 Certbot 为例：
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d your-domain.com
-```
-
-Renewal check:
-
-```bash
+sudo certbot --nginx -d your-domain.example
 sudo certbot renew --dry-run
 ```
 
-## 11. Production Checklist
+## 更新部署
 
-Before exposing the service publicly:
+更新前先记录当前提交并备份数据库：
 
-- Change `MYSQL_ROOT_PASSWORD`.
-- Change `JWT_SECRET` to a long random value.
-- Do not expose MySQL or Redis ports publicly.
-- Keep `.env` out of Git.
-- Configure CORS origins explicitly.
-- Use HTTPS.
-- Use `AGENT_MODE=demo` for stable demos or configure a valid model key for `live`.
-- Check Docker logs after every deployment.
-- Backup MySQL data if real user data is stored.
+```bash
+git rev-parse HEAD
+docker compose exec mysql sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" ecommerce_db' > ecommerce_db.sql
+git pull --ff-only
+docker compose build
+docker compose up -d
+docker compose ps
+```
 
-## 12. Troubleshooting
+备份文件含业务数据和密码摘要，应限制权限、加密保存且不得提交 Git。
 
-### 12.1 Port Already in Use
+## 回滚
 
-Change ports in `.env`:
+如果新版本失败：
+
+1. 查看 `docker compose logs` 确认问题。
+2. 切回更新前记录的已知良好提交或镜像标签。
+3. 重新执行 `docker compose build` 和 `up -d`。
+4. 只有发生不兼容数据变更且确认必要时，才从备份恢复数据库。
+
+当前项目尚未引入数据库迁移工具，因此正式生产化前应先增加 Flyway/Liquibase，避免依赖手工 SQL 回滚。
+
+## 生产检查清单
+
+- Java 与 Python 全量测试通过。
+- Docker 冷启动和健康检查通过。
+- `.env` 不在 Git 跟踪中。
+- 默认数据库密码、JWT Secret 已替换。
+- CORS 只允许正式域名。
+- HTTPS 已启用。
+- 数据库和调试端口未暴露公网。
+- live 模式模型名、Key、配额和超时已验证。
+- SSE 经过 Nginx 实际验证。
+- 备份、恢复和回滚完成演练。
+- 日志、录屏和截图没有暴露密钥或完整令牌。
+
+## 常见问题
+
+### 端口占用
+
+在 `.env` 修改：
 
 ```dotenv
 BACKEND_HOST_PORT=18080
 AGENT_HOST_PORT=18000
 ```
 
-Restart:
+### MySQL 初始化没有执行
+
+初始化脚本只在 volume 为空时执行。演示环境确认可以丢弃数据后，使用 `docker compose down -v` 重建。
+
+### Agent 无法访问 Java
+
+容器内地址应为 `http://backend:8080/api`，不能使用 `localhost:8080`。
+
+### live 模式缺少 Key
+
+检查 `.env` 后运行：
 
 ```powershell
-docker compose up --build -d
+docker compose up --build -d agent
+docker compose logs -f agent
 ```
 
-Or:
+### SSE 本地正常、代理后不流式
 
-```powershell
-docker-compose up --build -d
-```
+检查 Nginx 的 `proxy_buffering off`、`proxy_cache off` 和 `proxy_read_timeout`。
 
-### 12.2 MySQL Initialization Did Not Run
+### Docker daemon 未启动
 
-Docker only runs `/docker-entrypoint-initdb.d` scripts when the volume is empty.
-
-Reset:
-
-```powershell
-docker compose down -v
-docker compose up --build -d
-```
-
-If using standalone Compose:
-
-```powershell
-docker-compose down -v
-docker-compose up --build -d
-```
-
-### 12.3 Agent Cannot Reach Java Backend
-
-Inside Docker, Agent must use:
-
-```text
-http://backend:8080/api
-```
-
-Do not use `localhost:8080` inside the Agent container, because `localhost` means the Agent container itself.
-
-### 12.4 Live Mode Reports Missing API Key
-
-Either configure:
-
-```dotenv
-OPENAI_API_KEY=your-api-key
-AGENT_MODE=live
-```
-
-Or switch back to:
-
-```dotenv
-AGENT_MODE=demo
-```
-
-### 12.5 SSE Works Locally but Not Behind Nginx
-
-Check Nginx config:
-
-```nginx
-proxy_buffering off;
-proxy_cache off;
-```
-
-Also check that the client is calling `/chat/stream`, not `/chat`.
-
-### 12.6 Docker Daemon Is Not Running
-
-If you see:
-
-```text
-failed to connect to the docker API at npipe:////./pipe/docker_engine
-The system cannot find the file specified.
-```
-
-Docker Desktop is not running or has not finished starting.
-
-Fix:
-
-1. Open Docker Desktop.
-2. Wait until Docker shows it is running.
-3. Run:
-
-```powershell
-docker info
-```
-
-4. Start the project again:
-
-```powershell
-docker-compose up --build -d
-```
-
-### 12.7 `docker compose` Reports `unknown flag: --build`
-
-Some Windows environments expose standalone Compose as `docker-compose.exe` instead of the Docker Compose v2 plugin.
-
-Use:
-
-```powershell
-docker-compose up --build -d
-```
-
-## 13. Interview Explanation
-
-You can explain deployment like this:
-
-> I containerized the Java backend, FastAPI Agent service, MySQL, and Redis with Docker Compose. The Java backend owns transactional e-commerce data, while the Agent service handles conversation, tool orchestration, SSE streaming, and confirmation workflows. Redis stores short-term memory, structured conversation state, and confirmation tokens. For local interviews I use demo mode to avoid model API instability; for live mode I inject the model key through `.env`. In production I would put Nginx in front of the Agent service, enable HTTPS, and keep MySQL/Redis private.
+先启动 Docker Desktop，再运行 `docker info`。如果 `docker compose` 不可用，更新 Docker Desktop 或安装 Compose v2。

@@ -13,7 +13,14 @@ class FakeEcommerce:
     def __init__(self):
         self.cart_adds = []
 
-    async def search_products(self, keyword: str):
+    async def search_products(
+        self,
+        keyword: str,
+        min_price: float | None = None,
+        max_price: float | None = None,
+        in_stock: bool | None = None,
+        created_after: str | None = None,
+    ):
         return [
             {"id": 1, "name": "入门手机", "price": 1999, "stock": 10},
             {"id": 2, "name": "旗舰手机", "price": 5999, "stock": 5},
@@ -39,7 +46,14 @@ class FakeEcommerce:
 
 
 class FakePagedEcommerce(FakeEcommerce):
-    async def search_products(self, keyword: str):
+    async def search_products(
+        self,
+        keyword: str,
+        min_price: float | None = None,
+        max_price: float | None = None,
+        in_stock: bool | None = None,
+        created_after: str | None = None,
+    ):
         return {
             "content": [
                 {"id": 2, "name": "Smartphone X", "price": 2999, "stock": 30},
@@ -375,7 +389,7 @@ async def test_demo_agent_reference_set_for_product_followup():
     )
     assert result.reference is not None
     assert result.reference.type == "product"
-    assert result.reference.value == "smartphone"
+    assert result.reference.value == "手机"
 
 
 @pytest.mark.asyncio

@@ -77,7 +77,12 @@ class KnowledgeBase:
     使用 TF-IDF 评分进行文档检索。
     """
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        prefer_database: bool = True,
+    ) -> None:
         self._repo = get_repository()
         self._documents: list[_Document] = []
         self._doc_count = 0
@@ -86,8 +91,9 @@ class KnowledgeBase:
         self._title_tokens: list[set[str]] = []
         self._tag_tokens: list[set[str]] = []
         
-        # 优先从数据库加载
-        self._load_from_database()
+        # 运行时优先从数据库加载；测试或离线场景可显式关闭，确保结果可复现。
+        if prefer_database:
+            self._load_from_database()
         
         # 如果数据库没有数据，回退到 JSON 文件
         if not self._documents:
