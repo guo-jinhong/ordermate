@@ -778,6 +778,13 @@ class EcommerceRepository:
             return {"id": user.id, "username": user.username, "nickname": user.nickname}
         return None
 
+    def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
+        """根据用户 ID 获取用户。"""
+        user = self.session.query(User).filter(User.id == user_id).first()
+        if user:
+            return {"id": user.id, "username": user.username, "nickname": user.nickname}
+        return None
+
     # ---------- 工具方法 ----------
 
     def _generate_order_no(self) -> str:

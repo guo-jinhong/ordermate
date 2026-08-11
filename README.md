@@ -12,6 +12,7 @@ OrderMate 是一个面向学习、面试与原型验证的电商智能客服项�
 - 登录后可查询购物车与订单，并执行加购、修改数量、下单、支付、取消等操作。
 - 下单、支付、取消订单等高风险动作需要用户明确确认。
 - 支持 SSE 流式事件与前端工具调用时间线。
+- 默认客户视角隐藏内部工具细节，开发者视角通过脱敏 Inspector 展示执行过程。
 - 支持多轮商品、购物车和订单指代状态。
 - 支持本地知识库检索；实时价格、库存和订单始终以 Java API 为准。
 - 默认 demo 模式无需模型 Key；live 模式支持 OpenAI-compatible API（包括 DeepSeek）。
@@ -114,10 +115,10 @@ OPENAI_BASE_URL=https://api.deepseek.com
 agent-service\.venv\Scripts\python.exe -m pytest -q agent-service\tests
 ```
 
-最近一次本地验证（2026-08-08）：
+最近一次本地验证（2026-08-10）：
 
 - Java：26 passed
-- Python：120 passed，1 个第三方弃用警告
+- Python：125 passed，1 个第三方弃用警告
 - Compose 配置：可解析出 `mysql`、`backend`、`agent`
 
 测试范围与手工验收清单见 [docs/test-plan.md](docs/test-plan.md)。
@@ -133,6 +134,7 @@ agent-service\.venv\Scripts\python.exe -m pytest -q agent-service\tests
 | [docs/deployment.md](docs/deployment.md) | Docker、服务器、Nginx、HTTPS、升级和回滚 |
 | [docs/security.md](docs/security.md) | 密钥、网络、数据与模型安全要求 |
 | [docs/test-plan.md](docs/test-plan.md) | 自动测试结果与手工验收清单 |
+| [docs/frontend-showcase.md](docs/frontend-showcase.md) | 前端设计决策、面试演示路线与验收标准 |
 | [docs/roadmap.md](docs/roadmap.md) | 后续优化方向 |
 | [agent-service/README.md](agent-service/README.md) | Agent 单独开发与工具说明 |
 

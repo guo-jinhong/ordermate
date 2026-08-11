@@ -6,6 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -28,6 +29,8 @@ from app.redis_stores import (
 from app.config import Settings
 from app.demo_agent import DemoAgentService
 from app.schemas import (
+    AuthSessionRequest,
+    AuthSessionResponse,
     ChatRequest,
     ChatResponse,
     ClearConversationRequest,
@@ -40,6 +43,20 @@ from app.schemas import (
 )
 from app.tools.confirmation import ConfirmationStore, fingerprint_access_token
 from app.tools.registry import ToolRegistry
+
+
+class VersionedStaticFiles(StaticFiles):
+    """Cache versioned assets aggressively while keeping bare asset URLs fresh."""
+
+    async def get_response(self, path: str, scope: dict[str, Any]):
+        response = await super().get_response(path, scope)
+        query = parse_qs(scope.get("query_string", b"").decode("ascii", errors="ignore"))
+        response.headers["Cache-Control"] = (
+            "public, max-age=31536000, immutable"
+            if query.get("v")
+            else "no-cache, must-revalidate"
+        )
+        return response
 
 
 logger = logging.getLogger(__name__)
@@ -152,11 +169,14 @@ def create_app(
         lifespan=lifespan,
     )
     static_dir = Path(__file__).resolve().parent / "static"
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    app.mount("/static", VersionedStaticFiles(directory=static_dir), name="static")
 
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
-        return FileResponse(static_dir / "index.html")
+        return FileResponse(
+            static_dir / "index.html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
@@ -174,6 +194,15 @@ def create_app(
         except EcommerceApiError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         return LoginResponse(access_token=token)
+
+    @app.post("/auth/session", response_model=AuthSessionResponse)
+    async def auth_session(request: AuthSessionRequest) -> AuthSessionResponse:
+        try:
+            user = await ecommerce.get_current_user(request.access_token)
+        except EcommerceApiError as exc:
+            raise HTTPException(status_code=401, detail="登录状态无效或已失效。") from exc
+        username = user.get("username") if isinstance(user, dict) else None
+        return AuthSessionResponse(username=username)
 
     @app.post("/chat", response_model=ChatResponse)
     async def chat(request: ChatRequest) -> ChatResponse:

@@ -277,3 +277,17 @@ class EcommerceClient:
         except Exception as e:
             logger.error(f"登录失败: {e}")
             raise EcommerceApiError(f"登录失败: {e}") from e
+
+    async def get_current_user(self, access_token: str) -> dict[str, Any]:
+        """验证本地数据库模式的访问令牌并返回当前用户。"""
+        user: dict[str, Any] | None = None
+        token_match = re.fullmatch(r"token-(\d+)", access_token)
+        if token_match:
+            user = self._run_sync(self.repo.get_user_by_id, int(token_match.group(1)))
+        else:
+            demo_match = re.fullmatch(r"demo-token-(.+)", access_token)
+            if demo_match:
+                user = self._run_sync(self.repo.get_user, demo_match.group(1))
+        if not user:
+            raise EcommerceApiError("登录状态无效或已失效。")
+        return user

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app.clients.ecommerce_client import EcommerceApiError
 from app.config import Settings
 from app.main import create_app
 
@@ -29,6 +30,11 @@ class FakeEcommerce:
         if username == "testuser" and password == "password":
             return "test-jwt"
         raise RuntimeError("invalid credentials")
+
+    async def get_current_user(self, access_token: str):
+        if access_token == "test-jwt":
+            return {"id": 1, "username": "testuser"}
+        raise EcommerceApiError("invalid token")
 
     async def get_order_detail(self, order_id: int, access_token: str | None):
         return {
@@ -109,6 +115,28 @@ def test_health_works_without_api_key():
     }
 
 
+def test_auth_session_validates_stored_token_and_returns_username():
+    settings = Settings(
+        openai_api_key=None,
+        openai_model="test-model",
+        openai_base_url=None,
+        ecommerce_api_base_url="http://backend.test/api",
+        request_timeout_seconds=1,
+        max_tool_rounds=3,
+        agent_mode="live",
+    )
+    app = create_app(settings, ecommerce_client=FakeEcommerce())
+
+    with TestClient(app) as client:
+        valid = client.post("/auth/session", json={"access_token": "test-jwt"})
+        invalid = client.post("/auth/session", json={"access_token": "expired-jwt"})
+
+    assert valid.status_code == 200
+    assert valid.json() == {"authenticated": True, "username": "testuser"}
+    assert invalid.status_code == 401
+    assert invalid.json()["detail"] == "登录状态无效或已失效。"
+
+
 def test_chat_explains_missing_api_key():
     settings = Settings(
         openai_api_key=None,
@@ -169,6 +197,29 @@ def test_index_serves_chat_interface():
     assert response.status_code == 200
     assert "OrderMate" in response.text
     assert "/static/app.js" in response.text
+    assert response.headers["cache-control"] == "no-cache, no-store, must-revalidate"
+
+
+def test_static_assets_use_version_aware_cache_headers():
+    settings = Settings(
+        openai_api_key=None,
+        openai_model="test-model",
+        openai_base_url=None,
+        ecommerce_api_base_url="http://backend.test/api",
+        request_timeout_seconds=1,
+        max_tool_rounds=3,
+        agent_mode="live",
+    )
+    app = create_app(settings, ecommerce_client=FakeEcommerce())
+
+    with TestClient(app) as client:
+        versioned = client.get("/static/app.js?v=20260810.7")
+        unversioned = client.get("/static/app.js")
+
+    assert versioned.status_code == 200
+    assert versioned.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert unversioned.status_code == 200
+    assert unversioned.headers["cache-control"] == "no-cache, must-revalidate"
 
 
 def test_auto_mode_uses_demo_agent_without_api_key():
