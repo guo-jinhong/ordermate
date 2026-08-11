@@ -8,154 +8,345 @@
       content="基于工具调用的电商订单智能客服 Agent 演示"
     />
     <title>OrderMate · 电商智能客服</title>
-    <link rel="stylesheet" href="/static/styles.css?v=3" />
-    <script src="/static/app.js?v=5" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=20260810.7" />
+    <script src="/static/app.js?v=20260810.7" defer></script>
+    <script>
+      window.addEventListener("DOMContentLoaded", () => {
+        window.setTimeout(() => {
+          if (document.documentElement.dataset.appReady === "true") return;
+          const warning = document.querySelector("#app-init-error");
+          if (warning) warning.hidden = false;
+        }, 1200);
+      });
+    </script>
   </head>
   <body>
-    <div class="app-shell">
-      <aside class="sidebar" aria-label="控制面板">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">O</div>
-          <div>
-            <strong>OrderMate</strong>
-            <span>Agent Console</span>
+    <div class="app-init-error" id="app-init-error" role="alert" hidden>
+      <strong>页面脚本未能正常启动</strong>
+      <span>请使用 Ctrl + F5 强制刷新；若仍然出现此提示，请确认 Agent 已重新构建。</span>
+    </div>
+    <a class="skip-link" href="#workspace">跳到对话区域</a>
+    <div class="sr-only" id="app-announcer" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="app-shell" id="app-shell" data-view="customer">
+      <aside class="sidebar" id="sidebar" aria-label="功能与账号">
+        <div class="sidebar-header">
+          <div class="brand">
+            <div class="brand-mark" aria-hidden="true">O</div>
+            <div>
+              <strong>OrderMate AI</strong>
+              <span>智能购物助手</span>
+            </div>
           </div>
+          <button
+            class="sidebar-close"
+            id="sidebar-close"
+            type="button"
+            aria-label="关闭功能栏"
+          >
+            ×
+          </button>
         </div>
 
-        <section class="status-panel" aria-labelledby="system-status-title">
-          <div class="section-label" id="system-status-title">系统状态</div>
-          <div class="status-row">
-            <span>Agent 服务</span>
-            <span class="status-pill" id="agent-status">
-              <i></i><span>检测中</span>
-            </span>
-          </div>
-          <div class="status-row">
-            <span>模型配置</span>
-            <span class="status-value" id="model-status">—</span>
-          </div>
-        </section>
-
-        <section class="login-panel" aria-labelledby="account-title">
-          <div class="section-label" id="account-title">演示账号</div>
-          <form id="login-form">
-            <label>
-              用户名
-              <input
-                id="username"
-                name="username"
-                autocomplete="username"
-                placeholder="testuser"
-                required
-              />
-            </label>
-            <label>
-              密码
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autocomplete="current-password"
-                placeholder="password"
-                required
-              />
-            </label>
-            <button class="secondary-button" type="submit" id="login-button">
-              登录以使用订单工具
-            </button>
-            <button class="demo-account-button" type="button" id="fill-demo-button">
-              填入演示账号
-            </button>
-          </form>
-          <div class="signed-in hidden" id="signed-in">
-            <div>
-              <span class="avatar" aria-hidden="true">✓</span>
+        <div class="sidebar-scroll">
+          <section class="login-panel" aria-labelledby="account-title">
+            <div class="section-label" id="account-title">账号状态</div>
+            <div class="auth-guest" id="auth-guest">
+              <div class="auth-guest-copy">
+                <span class="auth-guest-dot" aria-hidden="true"></span>
+                <div>
+                  <strong>未登录</strong>
+                  <span>商品搜索可直接使用</span>
+                </div>
+              </div>
+              <button class="auth-expand-button" id="auth-expand-button" type="button" data-button-level="secondary" aria-controls="login-form" aria-expanded="false">
+                登录演示账号
+              </button>
+            </div>
+            <form class="hidden" id="login-form" method="post" action="/auth/login" accept-charset="UTF-8">
+              <label>
+                用户名
+                <input
+                  id="username"
+                  name="username"
+                  autocomplete="username"
+                  placeholder="testuser"
+                  required
+                />
+              </label>
+              <label>
+                密码
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autocomplete="current-password"
+                  placeholder="password"
+                  required
+                />
+              </label>
+              <button class="primary-button" type="submit" id="login-button" data-button-level="primary">
+                登录
+              </button>
+              <button class="demo-account-button" type="button" id="fill-demo-button" data-button-level="secondary">
+                填入演示账号
+              </button>
+            </form>
+            <div class="auth-checking hidden" id="auth-checking" role="status" aria-live="polite">
+              <span class="auth-spinner" aria-hidden="true"></span>
+              <span>正在确认登录状态…</span>
+            </div>
+            <div class="signed-in hidden" id="signed-in">
               <div>
-                <strong id="signed-in-name">已登录</strong>
-                <span>订单工具已解锁</span>
+                <span class="avatar" aria-hidden="true">✓</span>
+                <div>
+                  <strong id="signed-in-name">已登录</strong>
+                  <span>订单工具已解锁</span>
+                </div>
+              </div>
+              <button type="button" class="text-button" id="logout-button" data-button-level="text">退出登录</button>
+            </div>
+            <div class="pending-action hidden" id="pending-action" role="status">
+              <span id="pending-action-copy">登录后继续刚才的操作？</span>
+              <div>
+                <button type="button" class="pending-cancel-button" id="pending-action-cancel" data-button-level="text">暂不继续</button>
+                <button type="button" class="pending-continue-button" id="pending-action-continue" data-button-level="primary">继续执行</button>
               </div>
             </div>
-            <button type="button" class="text-button" id="logout-button">退出</button>
-          </div>
-          <p class="form-hint" id="login-hint">
-            演示账号：testuser / password。登录后可查询和取消本人订单。
-          </p>
-        </section>
+            <p class="form-hint" id="login-hint" role="status" aria-live="polite">
+              登录后可使用购物车和本人订单工具。
+            </p>
+          </section>
 
-        <section class="quick-panel" aria-labelledby="quick-title">
-          <div class="section-label" id="quick-title">快速演示</div>
-          <button class="quick-action" data-prompt="推荐 3000 元以内的手机">
-            <span>01</span>商品推荐
+          <button class="new-chat-button" id="new-chat-button" type="button" data-button-level="secondary">
+            <span aria-hidden="true">＋</span>
+            新建会话
           </button>
-          <button class="quick-action" data-prompt="查看我的购物车">
-            <span>02</span>查看购物车
-          </button>
-          <button class="quick-action" data-prompt="查询我的最近订单">
-            <span>03</span>查询订单
-          </button>
-          <button class="quick-action" data-prompt="取消订单 1">
-            <span>04</span>取消订单演示
-          </button>
-        </section>
 
-        <p class="sidebar-note">
-          写操作始终需要单独确认。模型无法绕过服务端安全边界。
-        </p>
+          <section class="quick-panel" aria-labelledby="quick-title">
+            <div class="section-label" id="quick-title">快捷功能</div>
+            <button class="quick-action" data-prompt="推荐 3000 元以内的手机">
+              <span aria-hidden="true">◇</span>商品推荐
+            </button>
+            <button class="quick-action" data-prompt="查看我的购物车" data-auth-required="true" data-auth-label="查看个人购物车">
+              <span aria-hidden="true">＋</span>查看购物车
+            </button>
+            <button class="quick-action" data-prompt="查询我的最近订单" data-auth-required="true" data-auth-label="查询本人订单">
+              <span aria-hidden="true">≡</span>查询订单
+            </button>
+            <button class="quick-action" data-prompt="取消订单 1" data-auth-required="true" data-auth-label="取消订单">
+              <span aria-hidden="true">?</span>售后与取消
+            </button>
+          </section>
+
+          <section class="status-panel" aria-labelledby="system-status-title">
+            <div class="section-label" id="system-status-title">服务状态</div>
+            <div class="status-row">
+              <span>Agent 服务</span>
+              <span class="status-pill" id="agent-status">
+                <i></i><span>检测中</span>
+              </span>
+            </div>
+            <div class="status-row">
+              <span>模型配置</span>
+              <span class="status-value" id="model-status">—</span>
+            </div>
+          </section>
+
+          <section class="security-panel" aria-labelledby="security-title">
+            <div class="section-label" id="security-title">安全说明</div>
+            <p class="sidebar-note">
+              写操作始终需要单独确认，服务端负责最终安全校验。
+            </p>
+            <span class="ui-version" id="ui-version" data-ui-version="2">UI v2 · 20260810.7</span>
+          </section>
+        </div>
       </aside>
 
-      <main class="workspace">
+      <div class="app-frame">
         <header class="topbar">
-          <div>
-            <span class="eyebrow">E-COMMERCE AGENT / LIVE DEMO</span>
-            <h1>智能订单助手</h1>
+          <div class="topbar-title">
+            <button
+              class="mobile-menu-button"
+              id="sidebar-open"
+              type="button"
+              aria-label="打开功能栏"
+              aria-controls="sidebar"
+              aria-expanded="false"
+            >
+              ☰
+            </button>
+            <div>
+              <span class="eyebrow">AI COMMERCE ASSISTANT</span>
+              <h1>智能购物助手</h1>
+            </div>
           </div>
-          <button class="icon-button" id="clear-button" type="button" title="清空对话">
-            清空
-          </button>
+
+          <div class="view-switch" role="tablist" aria-label="工作区视图">
+            <button
+              class="view-switch-button active"
+              id="customer-view-button"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="inspector-panel"
+              data-view-mode="customer"
+            >
+              对话视图
+            </button>
+            <button
+              class="view-switch-button"
+              id="developer-view-button"
+              type="button"
+              role="tab"
+              tabindex="-1"
+              aria-selected="false"
+              aria-controls="inspector-panel"
+              data-view-mode="developer"
+            >
+              调试视图
+            </button>
+          </div>
+
+          <div class="topbar-actions">
+            <span class="topbar-online" id="topbar-status"><i></i><span>检测中</span></span>
+          </div>
         </header>
 
-        <section
-          class="conversation"
-          id="conversation"
-          aria-live="polite"
-          aria-label="对话内容"
-        >
-          <article class="message assistant-message">
-            <div class="message-avatar" aria-hidden="true">AI</div>
-            <div class="message-content">
-              <div class="message-meta">OrderMate <span>刚刚</span></div>
-              <div class="message-bubble">
-                <p>
-                  你好，我可以帮你搜索商品、查看购物车和查询本人订单。
-                  取消订单等写操作会在执行前向你确认。
+        <div class="workbench">
+          <main class="workspace" id="workspace" tabindex="-1">
+            <section
+              class="conversation"
+              id="conversation"
+              aria-live="polite"
+              aria-label="对话内容"
+            >
+              <section class="welcome-state" id="welcome-state" aria-labelledby="welcome-title">
+                <div class="welcome-orb" aria-hidden="true">
+                  <span>AI</span>
+                </div>
+                <span class="welcome-eyebrow">ORDERMATE AI COMMERCE</span>
+                <h2 id="welcome-title">今天想买些什么？</h2>
+                <p class="welcome-lead">
+                  我可以理解你的预算和需求，帮助你搜索商品、管理购物车和查询订单。
                 </p>
-              </div>
-              <div class="suggestion-row">
-                <button data-prompt="推荐 3000 元以内的手机">推荐商品</button>
-                <button data-prompt="我的订单有哪些？">查询订单</button>
-              </div>
-            </div>
-          </article>
-        </section>
 
-        <div class="composer-wrap">
-          <form class="composer" id="chat-form">
-            <textarea
-              id="message-input"
-              rows="1"
-              maxlength="4000"
-              placeholder="输入你的问题，例如：帮我找一款手机…"
-              aria-label="消息"
-              required
-            ></textarea>
-            <button class="send-button" id="send-button" type="submit">
-              <span>发送</span>
-              <span aria-hidden="true">↗</span>
-            </button>
-          </form>
-          <p>Enter 发送 · Shift + Enter 换行 · AI 可能出错，关键操作由服务端校验</p>
+                <div class="capability-grid" aria-label="常用能力">
+                  <button class="capability-card" data-prompt="推荐 3000 元以内的手机">
+                    <span class="capability-icon product" aria-hidden="true">◇</span>
+                    <span>
+                      <strong>智能商品推荐</strong>
+                      <small>根据预算和需求筛选</small>
+                    </span>
+                    <i aria-hidden="true">↗</i>
+                  </button>
+                  <button class="capability-card" data-prompt="查看我的购物车" data-auth-required="true" data-auth-label="管理个人购物车">
+                    <span class="capability-icon cart" aria-hidden="true">＋</span>
+                    <span>
+                      <strong>管理购物车</strong>
+                      <small>查看商品、数量和金额</small>
+                    </span>
+                    <i aria-hidden="true">↗</i>
+                  </button>
+                  <button class="capability-card" data-prompt="查询我的最近订单" data-auth-required="true" data-auth-label="查询本人订单">
+                    <span class="capability-icon order" aria-hidden="true">▤</span>
+                    <span>
+                      <strong>查询我的订单</strong>
+                      <small>了解订单和支付状态</small>
+                    </span>
+                    <i aria-hidden="true">↗</i>
+                  </button>
+                  <button class="capability-card" data-prompt="我想了解取消订单的规则">
+                    <span class="capability-icon service" aria-hidden="true">?</span>
+                    <span>
+                      <strong>售后服务</strong>
+                      <small>咨询规则并安全处理</small>
+                    </span>
+                    <i aria-hidden="true">↗</i>
+                  </button>
+                </div>
+
+                <div class="welcome-auth-note" id="welcome-auth-note">
+                  <span aria-hidden="true">i</span>
+                  <span id="welcome-auth-copy">
+                    商品搜索可以直接使用；购物车和订单功能需要先登录演示账号。
+                  </span>
+                </div>
+              </section>
+            </section>
+
+            <div class="composer-wrap">
+              <form class="composer" id="chat-form" aria-label="发送消息">
+                <textarea
+                  id="message-input"
+                  rows="1"
+                  maxlength="4000"
+                  placeholder="询问商品、购物车或订单…"
+                  aria-label="消息"
+                  required
+                ></textarea>
+                <button class="send-button" id="send-button" type="submit" data-button-level="primary" aria-label="发送消息">
+                  <span>发送</span>
+                  <span aria-hidden="true">↗</span>
+                </button>
+              </form>
+              <p>Enter 发送 · Shift + Enter 换行 · 关键操作由服务端校验</p>
+            </div>
+          </main>
+
+          <aside
+            class="inspector-panel"
+            id="inspector-panel"
+            aria-label="Agent 开发者检查器"
+            aria-hidden="true"
+          >
+            <div class="inspector-header">
+              <div>
+                <span class="eyebrow">DEVELOPER VIEW</span>
+                <h2>Agent Inspector</h2>
+              </div>
+              <button
+                class="inspector-close"
+                id="inspector-close"
+                type="button"
+                aria-label="关闭开发者检查器"
+              >
+                ×
+              </button>
+            </div>
+            <div class="inspector-body" id="inspector-body" aria-live="polite">
+              <div class="inspector-empty" id="inspector-empty">
+                <span class="inspector-empty-icon" aria-hidden="true">&lt;/&gt;</span>
+                <strong>等待执行事件</strong>
+                <p>发送一条消息后，这里会显示 Agent 的执行时间线与脱敏数据。</p>
+              </div>
+              <section class="inspector-run hidden" id="inspector-run" aria-label="本轮执行详情">
+                <div class="inspector-run-head">
+                  <div>
+                    <span class="inspector-kicker">CURRENT RUN</span>
+                    <strong id="inspector-run-title">正在准备</strong>
+                  </div>
+                  <span class="inspector-run-state" id="inspector-run-state">等待</span>
+                </div>
+                <p class="inspector-query" id="inspector-query"></p>
+                <div class="inspector-metrics" id="inspector-metrics"></div>
+                <ol class="inspector-timeline" id="inspector-timeline"></ol>
+              </section>
+            </div>
+            <div class="inspector-footer">
+              <span><i id="inspector-sse-dot"></i><b id="inspector-sse-status">SSE 空闲</b></span>
+              <span>模型 <code id="inspector-model">待检测</code></span>
+              <span>会话 <code id="inspector-session">—</code></span>
+            </div>
+          </aside>
         </div>
-      </main>
+      </div>
+
+      <button
+        class="shell-backdrop"
+        id="shell-backdrop"
+        type="button"
+        aria-label="关闭面板"
+      ></button>
     </div>
 
     <template id="user-message-template">
@@ -173,10 +364,12 @@
         <div class="message-avatar" aria-hidden="true">AI</div>
         <div class="message-content">
           <div class="message-meta">OrderMate <span>刚刚</span></div>
-          <div class="message-bubble"><p></p></div>
+          <div class="message-bubble">
+            <p></p>
+            <span class="message-status-label hidden"></span>
+          </div>
           <div class="reference-bar hidden"></div>
           <div class="result-list hidden"></div>
-          <div class="tool-trace hidden"></div>
           <div class="confirmation-card hidden"></div>
         </div>
       </article>

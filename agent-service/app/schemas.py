@@ -21,6 +21,15 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class AuthSessionRequest(BaseModel):
+    access_token: str = Field(min_length=1, max_length=4096, repr=False)
+
+
+class AuthSessionResponse(BaseModel):
+    authenticated: bool = True
+    username: str | None = None
+
+
 class Confirmation(BaseModel):
     token: str
     action: str

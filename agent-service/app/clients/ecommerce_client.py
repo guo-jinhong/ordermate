@@ -77,6 +77,9 @@ class EcommerceClient:
             raise EcommerceApiError("Login response did not contain an access token.")
         return data
 
+    async def get_current_user(self, access_token: str) -> Any:
+        return await self._request("GET", "/users/info", access_token=access_token)
+
     async def get_product_detail(self, product_id: int) -> Any:
         return await self._request("GET", f"/products/{product_id}")
 
