@@ -1,0 +1,86 @@
+:root {
+  color-scheme: light;
+
+  /* Semantic colors */
+  --color-canvas: #f4f7fb;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f8faff;
+  --color-surface-raised: rgba(255, 255, 255, 0.92);
+  --color-ink: #111827;
+  --color-muted: #64748b;
+  --color-subtle: #94a3b8;
+  --color-line: #dce3ee;
+  --color-line-strong: #cbd5e1;
+
+  --color-primary: #4f7cff;
+  --color-primary-hover: #3d69ed;
+  --color-primary-soft: #edf2ff;
+  --color-primary-ink: #173b9d;
+  --color-on-primary: #ffffff;
+
+  --color-ai: #7c5cfc;
+  --color-ai-hover: #6848e8;
+  --color-ai-soft: #f1eeff;
+  --color-success: #20a77a;
+  --color-success-hover: #168762;
+  --color-success-soft: #e9f8f2;
+  --color-warning: #d9981e;
+  --color-warning-hover: #bc7f12;
+  --color-warning-soft: #fff7df;
+  --color-danger: #d24c4c;
+  --color-danger-hover: #ba3e3e;
+  --color-danger-soft: #fff0f0;
+
+  --color-navy: #0b1220;
+  --color-navy-raised: #111c30;
+  --color-navy-soft: #1b2940;
+  --color-on-dark: #f8fafc;
+  --color-on-dark-muted: #9eacc0;
+  --color-backdrop: rgba(11, 18, 32, 0.56);
+
+  /* Typography */
+  --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Microsoft YaHei", sans-serif;
+  --font-display: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Microsoft YaHei", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --text-xs: 0.6875rem;
+  --text-sm: 0.75rem;
+  --text-base: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.125rem;
+  --text-2xl: clamp(1.5rem, 3vw, 2.125rem);
+  --leading-tight: 1.25;
+  --leading-normal: 1.55;
+  --leading-relaxed: 1.7;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-7: 1.75rem;
+  --space-8: 2rem;
+  --space-9: 2.25rem;
+  --space-10: 2.5rem;
+
+  /* Shape and elevation */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+  --radius-pill: 999px;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --shadow-md: 0 10px 30px rgba(15, 23, 42, 0.1);
+  --shadow-lg: 0 24px 64px rgba(15, 23, 42, 0.14);
+  --shadow-focus: 0 0 0 3px rgba(79, 124, 255, 0.24);
+
+  /* Motion and controls */
+  --duration-fast: 160ms;
+  --duration-normal: 240ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --control-height-sm: 2rem;
+  --control-height-md: 2.625rem;
+}

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -37,6 +37,13 @@ class Settings:
     ecommerce_api_base_url: str
     request_timeout_seconds: float
     max_tool_rounds: int
+    embedding_api_key: str | None = None
+    embedding_model: str = "text-embedding-3-small"
+    embedding_base_url: str | None = None
+    rerank_base_url: str | None = None
+    openai_fallback_model: str | None = None
+    openai_fallback_base_url: str | None = None
+    openai_fallback_api_key: str | None = None
     agent_mode: str = "auto"
     conversation_max_messages: int = 30
     conversation_ttl_seconds: int = 900
@@ -53,6 +60,12 @@ class Settings:
     mysql_database: str = "ecommerce_db"
     # 电商后端模式: database / api
     ecommerce_backend: str = "api"
+    # SEC-1: CORS 白名单（逗号分隔），生产环境禁止使用 *
+    cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    # SEC-3: /admin 接口鉴权 token
+    admin_token: str | None = None
+    # 公网安全：共享账号下禁用写操作（购物车/下单/支付/取消/退款）
+    public_readonly: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -60,6 +73,13 @@ class Settings:
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
             openai_base_url=os.getenv("OPENAI_BASE_URL") or None,
+            embedding_api_key=os.getenv("EMBEDDING_API_KEY") or None,
+            embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
+            embedding_base_url=os.getenv("EMBEDDING_BASE_URL") or None,
+            rerank_base_url=os.getenv("RERANK_BASE_URL") or None,
+            openai_fallback_model=os.getenv("OPENAI_FALLBACK_MODEL") or None,
+            openai_fallback_base_url=os.getenv("OPENAI_FALLBACK_BASE_URL") or None,
+            openai_fallback_api_key=os.getenv("OPENAI_FALLBACK_API_KEY") or None,
             ecommerce_api_base_url=os.getenv(
                 "ECOMMERCE_API_BASE_URL", "http://localhost:8080/api"
             ).rstrip("/"),
@@ -77,6 +97,9 @@ class Settings:
             mysql_password=os.getenv("MYSQL_PASSWORD", "123456"),
             mysql_database=os.getenv("MYSQL_DATABASE", "ecommerce_db"),
             ecommerce_backend=os.getenv("ECOMMERCE_BACKEND", "api").lower(),
+            cors_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()],
+            admin_token=os.getenv("ADMIN_TOKEN") or None,
+            public_readonly=os.getenv("PUBLIC_READONLY", "false").lower() in {"1", "true", "yes", "on"},
         )
 
     def resolved_agent_mode(self) -> str:
@@ -85,3 +108,61 @@ class Settings:
         if self.agent_mode not in {"live", "demo"}:
             raise ValueError("AGENT_MODE must be one of: auto, live, demo")
         return self.agent_mode
+
+    # 生产环境禁止使用的默认/示例密码与密钥（防止忘记改配置直接上线）
+    _FORBIDDEN_SECRETS = frozenset({
+        "123456",
+        "password",
+        "admin",
+        "agent_readonly_123456",
+        "local-demo-jwt-secret-key-change-before-production-2026-at-least-64-bytes-long",
+        "ecommerce-secret-key-very-long-and-secure-key-for-jwt-token-generation",
+        "dev-ecommerce-secret-key-only-for-local-development-do-not-use-in-prod",
+    })
+
+    def validate_for_production(self) -> None:
+        """Fail fast if production-critical secrets are still defaults/examples.
+
+        Only enforced when the app is running in a non-dev environment.
+        """
+        import os
+
+        if os.getenv("APP_ENV", "dev").lower() in {"dev", "development", "local", "test"}:
+            return
+
+        mode = self.resolved_agent_mode()
+        issues: list[str] = []
+
+        if mode == "live":
+            if not self.openai_api_key:
+                issues.append("OPENAI_API_KEY 未配置，live 模式无法运行")
+            elif self.openai_api_key in {"sk-demo", "test-key", "your-api-key-here"}:
+                issues.append("OPENAI_API_KEY 仍是示例值")
+
+        if self.db_type == "mysql":
+            if self.mysql_password in self._FORBIDDEN_SECRETS:
+                issues.append(f"MYSQL_PASSWORD 仍是默认/示例值: {self.mysql_password}")
+            if self.mysql_user in {"root", "agent_user"} and self.mysql_password in self._FORBIDDEN_SECRETS:
+                issues.append("MySQL 使用 root/agent_user + 默认密码，生产必须使用独立账号与强密码")
+
+        # D1-1: 生产环境禁止直连数据库，必须走后端 API，避免两套数据源不一致
+        if self.ecommerce_backend != "api":
+            issues.append(
+                f"ECOMMERCE_BACKEND 必须为 api（当前: {self.ecommerce_backend}）。"
+                "禁止直连数据库，所有业务数据必须通过后端 API 访问。"
+            )
+        if self.ecommerce_api_base_url in {"http://localhost:8080/api", "http://127.0.0.1:8080/api"}:
+            issues.append(f"ECOMMERCE_API_BASE_URL 指向 localhost: {self.ecommerce_api_base_url}")
+
+        if not self.redis_url:
+            issues.append("REDIS_URL 未配置，会话状态将丢失在进程内存中，多实例部署不可用")
+
+        # SEC-1: 生产环境 CORS 不能用通配符
+        if "*" in self.cors_origins:
+            issues.append("CORS_ORIGINS 包含通配符 *，生产环境必须配置具体域名白名单")
+
+        if issues:
+            raise RuntimeError(
+                "生产环境配置校验失败，请修正以下问题后再启动:\n  - "
+                + "\n  - ".join(issues)
+            )

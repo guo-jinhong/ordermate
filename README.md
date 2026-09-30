@@ -15,7 +15,7 @@ OrderMate 是一个面向学习、面试与原型验证的电商智能客服项�
 - 默认客户视角隐藏内部工具细节，开发者视角通过脱敏 Inspector 展示执行过程。
 - 支持多轮商品、购物车和订单指代状态。
 - 支持本地知识库检索；实时价格、库存和订单始终以 Java API 为准。
-- 默认 demo 模式无需模型 Key；live 模式支持 OpenAI-compatible API（包括 DeepSeek）。
+- 默认 `auto` 模式优先使用已配置的 OpenAI-compatible 模型（包括 DeepSeek）；未配置或请求级不可用时安全降级到 demo。
 - Redis 为可选能力；未配置时使用进程内存保存会话状态。
 
 ## 技术栈
@@ -25,7 +25,7 @@ OrderMate 是一个面向学习、面试与原型验证的电商智能客服项�
 | 业务后端 | Java 17、Spring Boot 3.1.5、Spring Security、JPA、JWT |
 | Agent 服务 | Python 3.12、FastAPI、LangGraph、OpenAI Python SDK |
 | 数据 | MySQL 8、可选 Redis、轻量知识库 |
-| 前端 | FastAPI 静态页面、原生 JavaScript、SSE |
+| 前端 | Vue 3 + Vite（主入口）、FastAPI 原生静态页面（回退入口） |
 | 交付 | Docker、Docker Compose、GitHub Actions |
 
 ## 最快启动
@@ -52,7 +52,16 @@ docker compose ps
 密码：password
 ```
 
-默认 Compose 启动 3 个服务：`mysql`、`backend`、`agent`。Redis 不在默认 Compose 中；只有显式配置可访问的 `REDIS_URL` 时才启用 Redis 持久状态。
+默认 Compose 启动 4 个服务：`mysql`、`backend`、`agent`、`frontend`。Redis 不在默认 Compose 中；只有显式配置可访问的 `REDIS_URL` 时才启用 Redis 持久状态。
+
+访问地址：
+
+- Vue 主入口：<http://localhost:8081>
+- 原生回退入口：<http://localhost:8081/legacy/>
+- Agent API：<http://localhost:8000/docs>
+- Java API：<http://localhost:8080/api/doc.html>
+
+> 生产环境建议不映射 agent 端口（8000），仅通过 frontend Nginx 反代访问。公网部署时默认启用 `PUBLIC_READONLY=true`，禁用购物车、下单、支付、取消和退款等写操作。
 
 完整的首次使用步骤、演示问题、停止和重置方式见 [QUICKSTART.md](QUICKSTART.md)。
 
@@ -62,7 +71,7 @@ docker compose ps
 | --- | --- | --- |
 | `demo` | 否 | 稳定、可复现的本地演示 |
 | `live` | 是 | 真实模型工具调用与多轮联调 |
-| `auto` | 可选 | 有 Key 时使用 live，否则使用 demo |
+| `auto` | 可选 | 有 Key 时优先 live；供应商不可用时请求级降级 demo |
 
 切换 live 模式前复制示例配置，真实 Key 只能放在未跟踪的 `.env` 中：
 
@@ -79,6 +88,8 @@ OPENAI_MODEL=填写当前可用的DeepSeek模型名
 OPENAI_BASE_URL=https://api.deepseek.com
 ```
 
+聊天模型与 Embedding 使用独立配置。DeepSeek 只承担推理时，不要把其 Chat Base URL 复用于 `text-embedding-3-small`；未配置 `EMBEDDING_API_KEY` 时知识库使用词法检索。
+
 不要把 `.env`、日志、数据库文件或真实访问令牌提交到 GitHub。
 
 ## 项目结构
@@ -86,12 +97,14 @@ OPENAI_BASE_URL=https://api.deepseek.com
 ```text
 .
 ├── src/                         Spring Boot 业务后端
-├── agent-service/               FastAPI Agent、前端、测试与知识库
+├── agent-service/               FastAPI Agent、原生前端、测试与知识库
+├── frontend/                    Vue 3 + Vite 前端（主入口）
 ├── docs/                        架构、开发、API、部署、安全与测试文档
 ├── images/                      架构与安全流程图
-├── docker-compose.yml           MySQL、backend、agent 编排
-├── start-demo.ps1               Docker 演示启动脚本
-├── start-local-full.ps1         Windows 本地进程完整启动脚本
+├── docker-compose.yml           MySQL、backend、agent、frontend 编排
+├── start-dev-stack.ps1          Windows 本地开发一键启动（Java+Agent+Vue）
+├── stop-dev-stack.ps1           Windows 本地开发一键停止
+├── start-local-full.ps1         Windows 本地进程完整启动脚本（后端+Agent）
 └── QUICKSTART.md                首次运行教学
 ```
 
@@ -115,11 +128,12 @@ OPENAI_BASE_URL=https://api.deepseek.com
 agent-service\.venv\Scripts\python.exe -m pytest -q agent-service\tests
 ```
 
-最近一次本地验证（2026-08-10）：
+最近一次本地验证（2026-09-28）：
 
-- Java：26 passed
-- Python：125 passed，1 个第三方弃用警告
-- Compose 配置：可解析出 `mysql`、`backend`、`agent`
+- Java：28 passed
+- Python：155 passed（分组验证），1 个第三方弃用警告
+- Vue：141 passed，另有 5 项生产产物契约测试
+- Compose 配置：可解析出 `mysql`、`backend`、`agent`、`frontend`
 
 测试范围与手工验收清单见 [docs/test-plan.md](docs/test-plan.md)。
 
@@ -135,6 +149,7 @@ agent-service\.venv\Scripts\python.exe -m pytest -q agent-service\tests
 | [docs/security.md](docs/security.md) | 密钥、网络、数据与模型安全要求 |
 | [docs/test-plan.md](docs/test-plan.md) | 自动测试结果与手工验收清单 |
 | [docs/frontend-showcase.md](docs/frontend-showcase.md) | 前端设计决策、面试演示路线与验收标准 |
+| [docs/frontend-vue-plan.md](docs/frontend-vue-plan.md) | Vue 前端的实施规范、类型契约、部署接入与任务拆分 |
 | [docs/roadmap.md](docs/roadmap.md) | 后续优化方向 |
 | [agent-service/README.md](agent-service/README.md) | Agent 单独开发与工具说明 |
 
@@ -144,7 +159,7 @@ agent-service\.venv\Scripts\python.exe -m pytest -q agent-service\tests
 - demo 数据和账号仅用于本地演示。
 - live 模式依赖模型服务的网络、配额和兼容性。
 - 当前没有数据库版本迁移工具，生产化前应引入 Flyway 或 Liquibase。
-- 尚未完成真实公网部署、备份恢复和压力测试验收。
+- 公网部署已完成安全门禁（`/admin`、`/metrics` 禁公网、Nginx 限流、Uvicorn 仅信任代理头、`PUBLIC_READONLY` 写操作隔离），但共享 `testuser` 账号下写操作默认禁用；如需开放写操作，应先实现访客级账号或数据隔离。
 
 ## 安全与许可
 

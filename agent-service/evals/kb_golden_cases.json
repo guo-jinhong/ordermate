@@ -1,0 +1,17 @@
+[
+  {"id":"r01","category":"policy","message":"退款多久能到账","expect_route":"rule","expect_hits":["after-sales-refund"],"gap":"none"},
+  {"id":"r02","category":"policy","message":"支持花呗分期付款吗","expect_route":"rule","expect_hits":["policy-payment-methods"],"gap":"none"},
+  {"id":"r03","category":"policy","message":"下单后多久发货","expect_route":"rule","expect_hits":["policy-shipping-time"],"gap":"none"},
+  {"id":"r04","category":"policy","message":"快递几天到","expect_route":"rule","expect_hits":["policy-shipping-time"],"gap":"synonym"},
+  {"id":"r05","category":"policy","message":"满多少包邮","expect_route":"rule","expect_hits":["policy-shipping-fee"],"gap":"synonym"},
+  {"id":"r06","category":"policy","message":"能开增值税专用发票吗","expect_route":"rule","expect_hits":["policy-invoice"],"gap":"none"},
+  {"id":"r07","category":"policy","message":"优惠券能叠加吗","expect_route":"rule","expect_hits":["policy-coupon"],"gap":"none"},
+  {"id":"r08","category":"policy","message":"会员分几个等级","expect_route":"rule","expect_hits":["policy-membership"],"gap":"none"},
+  {"id":"r09","category":"policy","message":"客服几点下班","expect_route":"rule","expect_hits":["policy-service-hours"],"gap":"none"},
+  {"id":"p01","category":"product","message":"Smartphone X 有什么配置","expect_route":"product","expect_hits":["product-smartphone-x"],"gap":"none"},
+  {"id":"p02","category":"product","message":"Laptop Pro 14 有多大内存","expect_route":"product","expect_hits":["product-laptop-pro-14"],"gap":"none"},
+  {"id":"p03","category":"product","message":"哪款耳机支持降噪","expect_route":"product","expect_hits":["product-wireless-headphones"],"gap":"none"},
+  {"id":"n01","category":"negative","message":"有雷蛇键盘卖吗","expect_route":"product","expect_hits":[],"gap":"missing_content"},
+  {"id":"n02","category":"negative","message":"支持以旧换新吗","expect_route":"rule","expect_hits":[],"gap":"missing_content"},
+  {"id":"n03","category":"negative","message":"能玩原神吗","expect_route":"rule","expect_hits":[],"gap":"missing_content"}
+]

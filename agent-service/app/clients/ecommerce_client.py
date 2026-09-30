@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
+
+from app.tracing import get_trace_id
 
 
 logger = logging.getLogger(__name__)
@@ -16,7 +19,18 @@ _NON_RETRYABLE_STATUSES = {400, 401, 403, 404, 422, 409}
 
 
 class EcommerceApiError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "ECOMMERCE_API_ERROR",
+        status_code: int | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 class EcommerceClient:
@@ -28,9 +42,21 @@ class EcommerceClient:
         max_retries: int = DEFAULT_MAX_RETRIES,
         backoff_seconds: list[float] | None = None,
     ) -> None:
+        normalized_base_url = base_url.rstrip("/")
+        hostname = (urlsplit(normalized_base_url).hostname or "").lower()
+        # 本机 Java 服务不应经过系统 HTTP(S)_PROXY，否则部分开发环境会把
+        # localhost 请求送到代理并返回 502，表现为“Agent 连不上后端”。
+        trust_env = hostname not in {"localhost", "127.0.0.1", "::1"}
+        # 细粒度超时：连接阶段 5s，读写阶段按传入值，避免慢连接长期占用连接池
         self._client = httpx.AsyncClient(
-            base_url=base_url.rstrip("/"),
-            timeout=timeout_seconds,
+            base_url=normalized_base_url,
+            trust_env=trust_env,
+            timeout=httpx.Timeout(
+                connect=5.0,
+                read=timeout_seconds,
+                write=timeout_seconds,
+                pool=5.0,
+            ),
         )
         self._max_retries = max_retries
         self._backoff_seconds = backoff_seconds or list(DEFAULT_BACKOFF_SECONDS)
@@ -86,6 +112,9 @@ class EcommerceClient:
     async def get_cart(self, access_token: str | None) -> Any:
         return await self._request("GET", "/shopping-cart", access_token=access_token)
 
+    async def get_addresses(self, access_token: str | None) -> Any:
+        return await self._request("GET", "/addresses", access_token=access_token)
+
     async def add_to_cart(
         self, product_id: int, quantity: int, access_token: str | None
     ) -> Any:
@@ -127,6 +156,17 @@ class EcommerceClient:
             "POST", f"/orders/{order_id}/cancel", access_token=access_token
         )
 
+    async def refund_order(
+        self, order_id: int, access_token: str | None, reason: str | None = None
+    ) -> Any:
+        """U1-1: 申请售后退款。"""
+        body: dict[str, Any] = {}
+        if reason:
+            body["reason"] = reason
+        return await self._request(
+            "POST", f"/orders/{order_id}/refund", access_token=access_token, json=body
+        )
+
     async def create_order(
         self,
         product_id: int,
@@ -163,8 +203,13 @@ class EcommerceClient:
         headers = {}
         if access_token:
             headers["Authorization"] = f"Bearer {access_token}"
+        # O1-2: 传播 trace_id 到后端，实现全链路追踪
+        trace_id = get_trace_id()
+        if trace_id and trace_id != "-":
+            headers["X-Trace-Id"] = trace_id
 
         last_error: Exception | None = None
+        last_status: int | None = None
         for attempt in range(self._max_retries + 1):
             try:
                 response = await self._client.request(
@@ -173,6 +218,7 @@ class EcommerceClient:
                 if response.status_code in _NON_RETRYABLE_STATUSES:
                     return self._parse_response(response)
                 if response.status_code >= 500:
+                    last_status = response.status_code
                     if attempt >= self._max_retries:
                         break
                     delay = self._backoff_seconds[min(attempt, len(self._backoff_seconds) - 1)]
@@ -206,10 +252,15 @@ class EcommerceClient:
 
         if last_error is not None:
             raise EcommerceApiError(
-                f"E-commerce API is unavailable: {last_error}"
+                "业务服务暂时不可用，请稍后重试。",
+                code="ECOMMERCE_BACKEND_UNAVAILABLE",
+                retryable=True,
             ) from last_error
         raise EcommerceApiError(
-            f"E-commerce API request failed after {self._max_retries + 1} attempts"
+            "业务服务暂时异常，请稍后重试。",
+            code="ECOMMERCE_BACKEND_5XX",
+            status_code=last_status,
+            retryable=True,
         )
 
     def _parse_response(self, response: httpx.Response) -> Any:
@@ -217,13 +268,17 @@ class EcommerceClient:
             payload = response.json()
         except ValueError as exc:
             raise EcommerceApiError(
-                f"E-commerce API returned invalid JSON (HTTP {response.status_code})"
+                f"业务服务返回了无法识别的数据（HTTP {response.status_code}）。",
+                code="ECOMMERCE_BACKEND_INVALID_RESPONSE",
+                status_code=response.status_code,
             ) from exc
 
         if response.is_error:
             message = payload.get("message") if isinstance(payload, dict) else None
             raise EcommerceApiError(
-                message or f"E-commerce API request failed (HTTP {response.status_code})"
+                message or f"业务服务请求失败（HTTP {response.status_code}）。",
+                code=f"ECOMMERCE_BACKEND_HTTP_{response.status_code}",
+                status_code=response.status_code,
             )
 
         if isinstance(payload, dict) and "code" in payload and "message" in payload:

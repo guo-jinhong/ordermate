@@ -35,6 +35,7 @@ public class OrderDTOConverter {
                 .paymentStatus(order.getPaymentStatus())
                 .paymentMethod(order.getPaymentMethod())
                 .remark(order.getRemark())
+                .expireAt(order.getExpireAt())
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())
                 .items(items)

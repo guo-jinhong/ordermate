@@ -8,12 +8,16 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
     show-sql: true
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
         format_sql: true
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
   jackson:
     default-property-inclusion: non_null
 
@@ -40,3 +44,14 @@ cors:
   allowed-headers: Authorization,Content-Type,X-Requested-With
   allow-credentials: true
   max-age: 3600
+
+# 订单相关配置
+order:
+  # 待支付订单超时时间（分钟），超时后系统自动取消并释放库存
+  payment-timeout-minutes: 15
+  # 超时订单调度器配置
+  timeout-scheduler:
+    # 轮询间隔（毫秒），上一轮执行完毕后等待多久开始下一轮
+    fixed-delay-ms: 60000
+    # 单次批量处理的订单数上限，避免长事务和内存压力
+    batch-size: 100

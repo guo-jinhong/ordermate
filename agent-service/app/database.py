@@ -21,6 +21,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     desc,
+    inspect,
     or_,
     text,
 )
@@ -51,7 +52,7 @@ def get_database_url() -> str:
         user = os.getenv("MYSQL_USER", "root")
         password = os.getenv("MYSQL_PASSWORD", "123456")
         database = os.getenv("MYSQL_DATABASE", "ecommerce_db")
-        return f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4"
+        return f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4&connect_timeout=2"
     else:
         # SQLite 模式
         db_path = os.getenv("SQLITE_PATH", "agent_service_dev.db")
@@ -186,15 +187,24 @@ class Address(Base):
 
 
 class Knowledge(Base):
-    """知识库表"""
+    """知识库表
+
+    doc_type 区分知识库类型（分库检索的基础）：
+    - rule: 售后/退款/配送/平台规则，仅售后与政策场景检索
+    - product: 商品特征片段（品牌/型号/卖点），仅商品语义查询检索；
+      实时价格库存不落知识库，永远以业务表和商品查询工具为准
+    """
     __tablename__ = "knowledge"
 
     id = Column(ID_TYPE, primary_key=True, autoincrement=True)
+    doc_type = Column(String(32), nullable=False, default="rule", index=True)
     category = Column(String(64), nullable=False, index=True)
     title = Column(String(200), nullable=False)
     content = Column(Text, nullable=False)
     keywords = Column(String(500), nullable=True)
+    source_id = Column(BigInteger, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class SystemConfig(Base):
@@ -232,14 +242,71 @@ def ensure_connection() -> bool:
 
 def init_db() -> None:
     """初始化数据库（创建表和示例数据）"""
+    _migrate_knowledge_columns()
     Base.metadata.create_all(engine)
-    
+    _migrate_knowledge_indexes()
+
     # 检查是否已有数据
     with SessionLocal() as session:
         existing = session.query(Product).count()
         if existing == 0:
             _seed_sample_data(session)
             logger.info("✅ 示例数据已创建")
+
+
+def _migrate_knowledge_columns() -> None:
+    """为旧版本 knowledge 表补充 doc_type / source_id / updated_at 列（幂等）。"""
+    inspector = inspect(engine)
+    if "knowledge" not in inspector.get_table_names():
+        return
+    existing = {column["name"] for column in inspector.get_columns("knowledge")}
+    required = {"doc_type", "source_id", "updated_at"}
+    if required <= existing:
+        return
+    column_ddl = {
+        "doc_type": "ALTER TABLE knowledge ADD COLUMN doc_type VARCHAR(32) NOT NULL DEFAULT 'rule'",
+        "source_id": "ALTER TABLE knowledge ADD COLUMN source_id BIGINT NULL",
+        "updated_at": "ALTER TABLE knowledge ADD COLUMN updated_at DATETIME NULL",
+    }
+    with engine.begin() as conn:
+        for name in sorted(required - existing):
+            conn.execute(text(column_ddl[name]))
+    logger.info("✅ knowledge 表已迁移，补充列: %s", ", ".join(sorted(required - existing)))
+
+
+def _migrate_knowledge_indexes() -> None:
+    """DB-1: 为 knowledge 表创建索引（幂等）。
+
+    - 复合索引 idx_knowledge_doc_type_category: 加速分库检索
+    - 全文索引 ft_knowledge(title, content, keywords): 加速关键词搜索（MySQL）
+    """
+    inspector = inspect(engine)
+    if "knowledge" not in inspector.get_table_names():
+        return
+    existing_indexes = {idx["name"] for idx in inspector.get_indexes("knowledge")}
+
+    with engine.begin() as conn:
+        # 复合索引：doc_type + category
+        if "idx_knowledge_doc_type_category" not in existing_indexes:
+            try:
+                conn.execute(text(
+                    "CREATE INDEX idx_knowledge_doc_type_category "
+                    "ON knowledge(doc_type, category)"
+                ))
+                logger.info("✅ knowledge 复合索引已创建: idx_knowledge_doc_type_category")
+            except Exception:
+                pass  # SQLite 或已存在时忽略
+
+        # 全文索引：title + content + keywords（仅 MySQL 支持）
+        if "ft_knowledge" not in existing_indexes:
+            try:
+                conn.execute(text(
+                    "CREATE FULLTEXT INDEX ft_knowledge "
+                    "ON knowledge(title, content, keywords)"
+                ))
+                logger.info("✅ knowledge 全文索引已创建: ft_knowledge")
+            except Exception:
+                pass  # SQLite 不支持全文索引，忽略
 
 
 def _seed_sample_data(session: Session) -> None:
@@ -338,21 +405,21 @@ def _seed_sample_data(session: Session) -> None:
     ]
     session.add_all(addresses)
     
-    # 知识库
+    # 知识库（seed 均为业务规则；商品特征 chunk 由 scripts/build_product_kb.py 生成）
     knowledge_items = [
-        Knowledge(category="refund", title="退款政策", content="商品支持7天无理由退货，需保持商品完好、配件齐全。退款将在收到退货后3-7个工作日内处理。", keywords="退款 退货 无理由 7天"),
-        Knowledge(category="refund", title="退款到账时间", content="原路退回至支付账户，支付宝/微信1-3个工作日，银行卡3-7个工作日。", keywords="退款 到账 原路返回 支付"),
-        Knowledge(category="return", title="换货流程", content="登录账户→我的订单→选择需换货订单→申请换货→填写换货原因→客服审核→寄回商品→收到新品。", keywords="换货 流程 申请 审核"),
-        Knowledge(category="payment", title="支付方式", content="支持支付宝、微信支付、银联云闪付、花呗分期（3/6/12期）、信用卡快捷支付。", keywords="支付 方式 支付宝 微信 分期"),
-        Knowledge(category="payment", title="优惠券使用", content="结算时自动匹配最优优惠券，不可与其他优惠叠加。每笔订单限用一张优惠券。", keywords="优惠券 优惠 叠加 结算"),
-        Knowledge(category="shipping", title="配送时间", content="下单后24小时内发货，一线城市1-3天送达，偏远地区3-7天送达。", keywords="配送 发货 时间 物流"),
-        Knowledge(category="shipping", title="运费说明", content="单笔订单满99元免运费，不足99元收取10元运费。偏远地区可能额外加收。", keywords="运费 包邮 配送 偏远地区"),
-        Knowledge(category="rules", title="发票开具", content="支持电子普通发票和增值税专用发票。下单时选择需要发票并填写抬头信息。", keywords="发票 抬头 电子 增值税"),
-        Knowledge(category="rules", title="会员等级", content="普通会员-银卡-金卡-钻石。等级由近12个月消费额决定，享专属折扣和优先客服。", keywords="会员 等级 折扣 积分"),
-        Knowledge(category="rules", title="积分规则", content="每消费1元积1分，积分可抵现（100积分=1元），也可兑换礼品。积分有效期12个月。", keywords="积分 抵现 兑换 有效期"),
-        Knowledge(category="rules", title="VIP权益", content="钻石会员享95折优惠、免费顺丰、专属客服、生日礼包、优先购买限量商品。", keywords="VIP 钻石 特权 折扣"),
-        Knowledge(category="service", title="客服时间", content="在线客服9:00-23:00，电话客服400-xxx-xxxx（工作日9:00-18:00）。", keywords="客服 时间 电话 在线"),
-        Knowledge(category="service", title="投诉处理", content="投诉将在24小时内响应，3个工作日内给出解决方案。不满意可申请升级处理。", keywords="投诉 处理 响应 升级"),
+        Knowledge(doc_type="rule", category="refund", title="退款政策", content="商品支持7天无理由退货，需保持商品完好、配件齐全。退款将在收到退货后3-7个工作日内处理。", keywords="退款 退货 无理由 7天"),
+        Knowledge(doc_type="rule", category="refund", title="退款到账时间", content="原路退回至支付账户，支付宝/微信1-3个工作日，银行卡3-7个工作日。", keywords="退款 到账 原路返回 支付"),
+        Knowledge(doc_type="rule", category="return", title="换货流程", content="登录账户→我的订单→选择需换货订单→申请换货→填写换货原因→客服审核→寄回商品→收到新品。", keywords="换货 流程 申请 审核"),
+        Knowledge(doc_type="rule", category="payment", title="支付方式", content="支持支付宝、微信支付、银联云闪付、花呗分期（3/6/12期）、信用卡快捷支付。", keywords="支付 方式 支付宝 微信 分期"),
+        Knowledge(doc_type="rule", category="payment", title="优惠券使用", content="结算时自动匹配最优优惠券，不可与其他优惠叠加。每笔订单限用一张优惠券。", keywords="优惠券 优惠 叠加 结算"),
+        Knowledge(doc_type="rule", category="shipping", title="配送时间", content="下单后24小时内发货，一线城市1-3天送达，偏远地区3-7天送达。", keywords="配送 发货 时间 物流"),
+        Knowledge(doc_type="rule", category="shipping", title="运费说明", content="单笔订单满99元免运费，不足99元收取10元运费。偏远地区可能额外加收。", keywords="运费 包邮 配送 偏远地区"),
+        Knowledge(doc_type="rule", category="rules", title="发票开具", content="支持电子普通发票和增值税专用发票。下单时选择需要发票并填写抬头信息。", keywords="发票 抬头 电子 增值税"),
+        Knowledge(doc_type="rule", category="rules", title="会员等级", content="普通会员-银卡-金卡-钻石。等级由近12个月消费额决定，享专属折扣和优先客服。", keywords="会员 等级 折扣 积分"),
+        Knowledge(doc_type="rule", category="rules", title="积分规则", content="每消费1元积1分，积分可抵现（100积分=1元），也可兑换礼品。积分有效期12个月。", keywords="积分 抵现 兑换 有效期"),
+        Knowledge(doc_type="rule", category="rules", title="VIP权益", content="钻石会员享95折优惠、免费顺丰、专属客服、生日礼包、优先购买限量商品。", keywords="VIP 钻石 特权 折扣"),
+        Knowledge(doc_type="rule", category="service", title="客服时间", content="在线客服9:00-23:00，电话客服400-xxx-xxxx（工作日9:00-18:00）。", keywords="客服 时间 电话 在线"),
+        Knowledge(doc_type="rule", category="service", title="投诉处理", content="投诉将在24小时内响应，3个工作日内给出解决方案。不满意可申请升级处理。", keywords="投诉 处理 响应 升级"),
     ]
     session.add_all(knowledge_items)
     
@@ -391,6 +458,12 @@ class EcommerceRepository:
         if self._session is None:
             self._session = get_session()
         return self._session
+
+    def close(self) -> None:
+        """释放当前 SQLAlchemy Session；Repository 下次访问时会按需重建。"""
+        if self._session is not None:
+            self._session.close()
+            self._session = None
 
     # ---------- 商品相关 ----------
 
@@ -493,6 +566,28 @@ class EcommerceRepository:
         if not product:
             return False, 0
         return product.stock >= quantity, product.stock
+
+    def get_user_addresses(self, user_id: int) -> list[dict[str, Any]]:
+        """获取用户地址，默认地址排在最前。"""
+        addresses = (
+            self.session.query(Address)
+            .filter(Address.user_id == user_id)
+            .order_by(Address.is_default.desc(), Address.id.asc())
+            .all()
+        )
+        return [
+            {
+                "id": address.id,
+                "name": address.receiver_name,
+                "phone": address.receiver_phone,
+                "province": address.province,
+                "city": address.city,
+                "district": address.district,
+                "address": address.detail,
+                "isDefault": address.is_default,
+            }
+            for address in addresses
+        ]
 
     # ---------- 订单相关 ----------
 
@@ -753,19 +848,37 @@ class EcommerceRepository:
 
     # ---------- 知识库相关 ----------
 
-    def search_knowledge(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        """搜索知识库"""
+    def search_knowledge(
+        self,
+        query: str,
+        limit: int = 10,
+        doc_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """搜索知识库
+
+        doc_type: 'rule' 只查规则知识，'product' 只查商品特征 chunk，
+        None 查全部（旧行为，仅用于对比验证）。
+        """
         query_builder = self.session.query(Knowledge)
+        if doc_type:
+            query_builder = query_builder.filter(Knowledge.doc_type == doc_type)
         query = (query or "").strip()
         if query:
-            keyword = f"%{query}%"
-            query_builder = query_builder.filter(
-                or_(
-                    Knowledge.title.like(keyword),
-                    Knowledge.content.like(keyword),
-                    Knowledge.keywords.like(keyword),
+            # DB-1: 优先用 MySQL 全文索引（MATCH AGAINST），失败回退到 LIKE
+            try:
+                from sqlalchemy import func
+                query_builder = query_builder.filter(
+                    func.match(Knowledge.title, Knowledge.content, Knowledge.keywords).against(query)
+                ).order_by(func.match(Knowledge.title, Knowledge.content, Knowledge.keywords).against(query).desc())
+            except Exception:
+                keyword = f"%{query}%"
+                query_builder = query_builder.filter(
+                    or_(
+                        Knowledge.title.like(keyword),
+                        Knowledge.content.like(keyword),
+                        Knowledge.keywords.like(keyword),
+                    )
                 )
-            )
         results = query_builder.order_by(Knowledge.id.asc()).limit(limit).all()
         return [self._knowledge_to_dict(k) for k in results]
 
@@ -830,10 +943,12 @@ class EcommerceRepository:
     def _knowledge_to_dict(self, k: Knowledge) -> dict[str, Any]:
         return {
             "id": k.id,
+            "doc_type": k.doc_type,
             "category": k.category,
             "title": k.title,
             "content": k.content,
             "keywords": k.keywords,
+            "source_id": k.source_id,
         }
 
 

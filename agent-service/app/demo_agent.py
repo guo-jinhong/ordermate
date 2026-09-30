@@ -4,7 +4,9 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.approval_workflow import ApprovalWorkflow
 from app.conversation_state import ConversationState, ConversationStateStore
+from app.knowledge_base import knowledge_search_intent, route_knowledge_base
 from app.product_terms import extract_product_keyword
 from app.schemas import ChatResponse, ReferenceResolution, ToolCallRecord
 from app.security_guard import is_suspicious_instruction
@@ -42,7 +44,7 @@ def _resolve_or_clarify_order_id(
     explicit_id = _extract_number_from_text(lowered)
     order_id = state.resolve_order_id(message, explicit_id)
     if order_id is None:
-        return None, ChatResponse(answer="请告诉我需要操作的订单 ID。")
+        return None, ChatResponse(answer="请告诉我需要操作的订单号，或先查看订单列表。")
     return order_id, None
 
 
@@ -54,16 +56,18 @@ def _resolve_or_clarify_product_id(
     explicit_id = _extract_product_id_from_text(lowered)
     product_id = state.resolve_product_id(message, explicit_id)
     if product_id is None:
-        return None, ChatResponse(answer="请告诉我要操作的商品 ID，或先搜索/推荐商品。")
+        return None, ChatResponse(answer="请告诉我商品名称，或先搜索/推荐商品。")
     return product_id, None
 
 
 def _resolve_or_clarify_cart_id(
+    message: str,
     lowered: str,
+    state: ConversationState,
 ) -> tuple[int | None, ChatResponse | None]:
-    cart_id = _extract_cart_id_from_text(lowered)
+    cart_id = state.resolve_cart_id(message, _extract_cart_id_from_text(lowered))
     if cart_id is None:
-        return None, ChatResponse(answer="请告诉我购物车项 cartId。")
+        return None, ChatResponse(answer="请先查看购物车，再告诉我要操作的商品名称。")
     return cart_id, None
 
 
@@ -75,9 +79,11 @@ class DemoAgentService:
         registry: ToolRegistry,
         *,
         state_store: ConversationStateStore | None = None,
+        approval_workflow: ApprovalWorkflow | None = None,
     ) -> None:
         self._registry = registry
         self._state_store = state_store
+        self._approval_workflow = approval_workflow
 
     async def chat(
         self,
@@ -119,26 +125,14 @@ class DemoAgentService:
             state.turn_count += 1
             return ChatResponse(answer=self._format_capabilities())
 
-        if self._contains_any(
-            lowered,
-            "退款",
-            "售后",
-            "规则",
-            "政策",
-            "参数",
-            "配置",
-            "refund",
-            "return",
-            "policy",
-            "warranty",
-            "shipping",
-            "invoice",
-            "membership",
-        ):
+        # 知识检索意图判定与 LLM 模式守卫共用 knowledge_search_intent（唯一词表），
+        # 见 app/knowledge_base.py 的"知识意图（唯一事实源）"。
+        if knowledge_search_intent(message):
             topic = message[:30]
             result = await self._run_tool(
                 "search_knowledge_base",
-                {"query": message},
+                # 意图路由（分库隔离）：由服务端同一词表决定检索规则库还是商品库
+                {"query": message, "kb": route_knowledge_base(message)},
                 session_id=session_id,
                 access_token=access_token,
                 success_prefix="我从项目知识库中检索到以下说明：",
@@ -183,7 +177,7 @@ class DemoAgentService:
                 {"product_id": product_id, "quantity": quantity},
                 session_id=session_id,
                 access_token=access_token,
-                success_prefix="已准备使用默认演示地址和 DEMO 支付方式创建订单，执行前需要你的确认。",
+                success_prefix="已准备创建订单，执行前需要你的确认。",
                 reference=ref,
             )
 
@@ -221,8 +215,15 @@ class DemoAgentService:
                 success_prefix="已准备清空购物车，执行前需要你的明确确认。",
             )
 
-        if self._contains_any(lowered, "删除购物车", "移除购物车", "删掉购物车", "remove cart"):
-            cart_id, clarification = _resolve_or_clarify_cart_id(lowered)
+        if self._contains_any(
+            lowered,
+            "删除购物车",
+            "移除购物车",
+            "购物车移除",
+            "删掉购物车",
+            "remove cart",
+        ):
+            cart_id, clarification = _resolve_or_clarify_cart_id(message, lowered, state)
             if clarification:
                 return clarification
             state.record_cart_view()
@@ -235,7 +236,7 @@ class DemoAgentService:
             )
 
         if self._contains_any(lowered, "修改购物车", "购物车数量", "改数量", "update cart"):
-            cart_id, clarification = _resolve_or_clarify_cart_id(lowered)
+            cart_id, clarification = _resolve_or_clarify_cart_id(message, lowered, state)
             if clarification:
                 return clarification
             quantity = self._extract_quantity(lowered)
@@ -273,12 +274,13 @@ class DemoAgentService:
                         )
                 if product_id is None:
                     return clarification
+            product_name = state.product_name_for_id(product_id) or "该商品"
             result = await self._run_tool(
                 "add_to_cart",
                 {"product_id": product_id, "quantity": quantity},
                 session_id=session_id,
                 access_token=access_token,
-                success_prefix=f"已将商品 #{product_id} x {quantity} 加入购物车。",
+                success_prefix=f"已将「{product_name}」加入购物车，共 {quantity} 件。",
             )
             if result.tool_calls and result.tool_calls[0].outcome == "success":
                 state.record_product(product_id)
@@ -286,14 +288,19 @@ class DemoAgentService:
             return result
 
         if self._contains_any(lowered, "购物车", "cart"):
-            state.record_cart_view()
-            return await self._run_tool(
+            result = await self._run_tool(
                 "get_cart",
                 {},
                 session_id=session_id,
                 access_token=access_token,
                 success_prefix="这是你当前的购物车：",
             )
+            if result.tool_calls and result.tool_calls[0].outcome == "success":
+                items = result.data if isinstance(result.data, list) else []
+                state.record_cart_items([item for item in items if isinstance(item, dict)])
+            else:
+                state.record_cart_view()
+            return result
 
         if self._contains_any(lowered, "订单", "order", "查一下订单", "看看订单"):
             explicit_id = self._extract_number(lowered)
@@ -384,19 +391,28 @@ class DemoAgentService:
 
             list_phone_products = self._contains_any(lowered, "手机")
             force_full_product_scan = list_all_products or list_phone_products
+            min_price, max_price, in_stock = self._extract_price_filters(message)
+            has_search_filters = any(
+                value is not None for value in (min_price, max_price, in_stock)
+            )
+            allows_generic_filtered_search = has_search_filters and self._contains_any(
+                lowered, "推荐", "商品", "产品", "搜索", "筛选", "找"
+            )
+            # 明确重新推荐泛类商品时，不继承上一轮的商品关键词。
+            if allows_generic_filtered_search and not explicit_keyword and self._contains_any(lowered, "商品", "产品"):
+                force_full_product_scan = True
             keyword = "" if force_full_product_scan else state.resolve_product_keyword(message, explicit_keyword)
             ref = None
             if not keyword and not force_full_product_scan:
                 keyword = explicit_keyword or ""
-            elif not explicit_keyword:
+            elif not explicit_keyword and keyword:
                 ref = ReferenceResolution(type="product", value=keyword)
             if not keyword:
-                if force_full_product_scan:
+                if force_full_product_scan or allows_generic_filtered_search:
                     keyword = ""
                 else:
                     return ChatResponse(answer="请告诉我你想搜索什么商品。")
 
-            min_price, max_price, in_stock = self._extract_price_filters(message)
             return await self._search_products(
                 keyword, lowered, state, session_id, access_token,
                 reference=ref,
@@ -495,11 +511,19 @@ class DemoAgentService:
             session_id=session_id,
             access_token=access_token,
         )
+        if result.outcome == "confirmation_required" and result.confirmation is not None and self._approval_workflow is not None:
+            await self._approval_workflow.start(
+                thread_id=result.confirmation.token,
+                action=result.confirmation.action,
+                arguments=result.confirmation.arguments,
+            )
         if result.outcome == "confirmation_required":
-            answer = success_prefix
+            description = result.confirmation.description if result.confirmation is not None else success_prefix
+            answer = f"已准备：{description}。请确认后执行。"
         elif result.outcome == "success":
             data = result.output.get("data")
-            answer = success_prefix if data is None else f"{success_prefix}\n{self._format_data(data)}"
+            mutation_tools = {"add_to_cart", "update_cart", "remove_from_cart", "clear_cart"}
+            answer = success_prefix if data is None or name in mutation_tools else f"{success_prefix}\n{self._format_data(data)}"
         else:
             answer = result.output.get("error", "工具执行失败。")
         return ChatResponse(
@@ -605,12 +629,15 @@ class DemoAgentService:
         products: list[dict[str, Any]], keyword: str
     ) -> str:
         if not products:
-            return f"暂时没有找到包含'{keyword}'的在售商品。"
+            if keyword:
+                return f"暂时没有找到与“{keyword}”匹配的在售商品。"
+            return "暂时没有找到符合当前筛选条件的在售商品。"
         lines = ["我找到这些商品："]
         for product in products[:10]:
             lines.append(
-                f"• #{product.get('id')} {product.get('name')} — "
-                f"¥{product.get('price')}，库存 {product.get('stock', '未知')}"
+                f"• {product.get('name') or '未命名商品'} — "
+                f"{DemoAgentService._format_currency(product.get('price'))}，"
+                f"库存 {product.get('stock', '未知')} 件"
             )
         return "\n".join(lines)
 
@@ -620,9 +647,9 @@ class DemoAgentService:
             return "没有查到这个商品的详情。"
         return (
             "商品详情如下：\n"
-            f"• #{data.get('id')} {data.get('name')}\n"
-            f"• 价格：¥{data.get('price')}\n"
-            f"• 库存：{data.get('stock', '未知')}\n"
+            f"• 商品：{data.get('name') or '未命名商品'}\n"
+            f"• 价格：{DemoAgentService._format_currency(data.get('price'))}\n"
+            f"• 库存：{data.get('stock', '未知')} 件\n"
             f"• 描述：{data.get('description') or '暂无描述'}"
         )
 
@@ -768,28 +795,56 @@ class DemoAgentService:
                 if not isinstance(item, dict):
                     lines.append(f"• {item}")
                     continue
-                identifier = item.get("orderNo") or item.get("id") or item.get("cartId")
-                status = item.get("status")
-                name = item.get("productName") or DemoAgentService._order_status(status)
-                amount = item.get("finalAmount") or item.get("price")
-                parts = [
-                    str(value)
-                    for value in (identifier, name, amount)
-                    if value is not None
-                ]
-                lines.append("• " + " · ".join(parts))
+                if item.get("orderNo"):
+                    lines.append(
+                        f"• 订单 {item['orderNo']} · "
+                        f"{DemoAgentService._order_status(item.get('status')) or '状态待确认'} · "
+                        f"{DemoAgentService._format_currency(item.get('finalAmount'))}"
+                    )
+                    continue
+                if item.get("productName"):
+                    quantity = item.get("quantity")
+                    quantity_text = f" · {quantity} 件" if quantity is not None else ""
+                    lines.append(
+                        f"• {item['productName']}{quantity_text} · "
+                        f"单价 {DemoAgentService._format_currency(item.get('price'))}"
+                    )
+                    continue
+                if item.get("name"):
+                    lines.append(
+                        f"• {item['name']} · "
+                        f"{DemoAgentService._format_currency(item.get('price'))}"
+                    )
             return "\n".join(lines)
         if isinstance(data, dict):
-            useful = [
-                (
-                    f"{key}: "
-                    f"{DemoAgentService._order_status(value) if key == 'status' else value}"
+            if data.get("orderNo"):
+                payment_status = DemoAgentService._payment_status(data.get("paymentStatus"))
+                amount_label = "实付金额" if data.get("paymentStatus") == 1 else "订单金额"
+                return "\n".join(
+                    [
+                        f"订单号：{data['orderNo']}",
+                        f"订单状态：{DemoAgentService._order_status(data.get('status')) or '待确认'}",
+                        f"支付状态：{payment_status}",
+                        f"{amount_label}：{DemoAgentService._format_currency(data.get('finalAmount'))}",
+                    ]
                 )
-                for key, value in data.items()
-                if key in {"id", "orderNo", "status", "paymentStatus", "finalAmount"}
-            ]
-            return "\n".join(useful) if useful else str(data)
+            return "已查询到相关信息，请查看下方详情。"
         return str(data)
+
+    @staticmethod
+    def _format_currency(value: Any) -> str:
+        if value is None or value == "":
+            return "金额待确认"
+        try:
+            amount = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return "金额待确认"
+        formatted = f"{amount:,.2f}".rstrip("0").rstrip(".")
+        return f"¥{formatted}"
+
+    @staticmethod
+    def _payment_status(status: Any) -> str:
+        return {0: "未支付", 1: "已支付"}.get(status, "待确认")
 
     @staticmethod
     def _order_status(status: Any) -> str | None:

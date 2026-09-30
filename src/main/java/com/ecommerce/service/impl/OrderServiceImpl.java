@@ -11,6 +11,8 @@ import com.ecommerce.service.UserService;
 import com.ecommerce.service.ProductService;
 import com.ecommerce.service.ShoppingCartService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -23,6 +25,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional
@@ -37,6 +40,10 @@ public class OrderServiceImpl implements OrderService {
     private final ShoppingCartService shoppingCartService;
     private final OrderPaymentService orderPaymentService;
 
+    /** 待支付订单超时时间（分钟），超时后系统自动取消并释放库存 */
+    @Value("${order.payment-timeout-minutes:15}")
+    private int paymentTimeoutMinutes;
+
     @Override
     public OrderDTO createOrder(Long userId, CreateOrderDTO createOrderDTO) {
         User user = userService.getUserById(userId);
@@ -47,6 +54,7 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException(403, "Address does not belong to current user");
         }
 
+        LocalDateTime now = LocalDateTime.now();
         String orderNo = "ORD-" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
         Order order = Order.builder()
                 .orderNo(orderNo)
@@ -57,6 +65,7 @@ public class OrderServiceImpl implements OrderService {
                 .paymentMethod(createOrderDTO.getPaymentMethod())
                 .remark(createOrderDTO.getRemark())
                 .discountAmount(BigDecimal.ZERO)
+                .expireAt(now.plusMinutes(paymentTimeoutMinutes))
                 .build();
 
         BigDecimal totalAmount = BigDecimal.ZERO;
@@ -112,6 +121,7 @@ public class OrderServiceImpl implements OrderService {
                 .collect(Collectors.toList());
         shoppingCartService.removeProductsFromCart(userId, orderedProductIds);
 
+        log.info("Order created: orderNo={}, userId={}, expireAt={}", orderNo, userId, savedOrder.getExpireAt());
         return OrderDTOConverter.convertToDTO(savedOrder);
     }
 
@@ -187,17 +197,28 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException("Only pending orders can be cancelled");
         }
 
-        List<OrderItem> items = orderItemRepository.findByOrderId(orderId);
-        for (OrderItem item : items) {
-            Product product = productService.getProductEntityForUpdate(
-                    item.getProduct().getId());
-            product.setStock(product.getStock() + item.getQuantity());
-            product.setSoldCount(product.getSoldCount() - item.getQuantity());
-        }
+        releaseStock(orderId);
 
         order.setStatus(4);
         Order cancelledOrder = orderRepository.save(order);
+        log.info("Order cancelled by user: orderId={}, userId={}", orderId, userId);
         return OrderDTOConverter.convertToDTO(cancelledOrder);
+    }
+
+    @Override
+    public boolean cancelExpiredOrder(Long orderId) {
+        // 幂等更新：仅当订单仍为待支付时才取消。返回影响行数，0 表示已被其他线程/实例处理
+        int affected = orderRepository.cancelIfPending(orderId, LocalDateTime.now());
+        if (affected == 0) {
+            log.debug("Order already processed by another instance: orderId={}", orderId);
+            return false;
+        }
+
+        // 释放库存。cancelIfPending 已通过乐观更新保证只有一个实例能执行到此处。
+        // 若库存释放失败，异常触发事务回滚，订单状态恢复为 pending，下次轮询自动重试。
+        releaseStock(orderId);
+        log.info("Expired order auto-cancelled and stock released: orderId={}", orderId);
+        return true;
     }
 
     @Override
@@ -250,6 +271,19 @@ public class OrderServiceImpl implements OrderService {
         }
     }
 
+    /**
+     * 释放订单占用的库存（将库存加回、销量扣回）。
+     * 供用户取消和系统超时取消复用。
+     */
+    private void releaseStock(Long orderId) {
+        List<OrderItem> items = orderItemRepository.findByOrderId(orderId);
+        for (OrderItem item : items) {
+            Product product = productService.getProductEntityForUpdate(item.getProduct().getId());
+            product.setStock(product.getStock() + item.getQuantity());
+            product.setSoldCount(product.getSoldCount() - item.getQuantity());
+        }
+    }
+
     private void validateStatusTransition(Integer currentStatus, Integer targetStatus) {
         if (targetStatus == null || targetStatus < 0 || targetStatus > 4) {
             throw new BusinessException("Invalid order status: " + targetStatus);
@@ -258,7 +292,8 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException("Order is already in status: " + targetStatus);
         }
         boolean valid = switch (currentStatus) {
-            case 0 -> targetStatus == 1;
+            // pending 可转为 paid(1) 或 cancelled(4) —— 放开超时自动取消路径
+            case 0 -> targetStatus == 1 || targetStatus == 4;
             case 1 -> targetStatus == 2 || targetStatus == 4;
             case 2 -> targetStatus == 3 || targetStatus == 4;
             case 3 -> false;

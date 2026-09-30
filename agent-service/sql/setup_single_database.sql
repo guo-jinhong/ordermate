@@ -10,6 +10,8 @@
 --   - 商品、订单、购物车、用户等业务表仍由 Spring Boot 后端管理
 --   - Agent 通过后端 API 操作业务数据
 --   - Agent 只直接读取 ecommerce_db.knowledge
+--   - doc_type='rule' 为业务规则；doc_type='product' 为商品特征 chunk，
+--     由 agent-service/scripts/build_product_kb.py 生成
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS ecommerce_db
@@ -20,18 +22,90 @@ USE ecommerce_db;
 
 CREATE TABLE IF NOT EXISTS knowledge (
     id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '知识ID',
+    doc_type VARCHAR(32) NOT NULL DEFAULT 'rule' COMMENT '知识类型: rule=业务规则, product=商品特征',
     category VARCHAR(64) NOT NULL COMMENT '分类',
     title VARCHAR(200) NOT NULL COMMENT '知识标题',
     content TEXT NOT NULL COMMENT '知识内容',
     keywords VARCHAR(500) DEFAULT NULL COMMENT '关键词，用于搜索',
+    source_id BIGINT DEFAULT NULL COMMENT '来源ID，product 类型对应商品ID',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     INDEX idx_knowledge_category (category),
+    INDEX idx_knowledge_doc_type (doc_type),
+    INDEX idx_knowledge_source_id (source_id),
     FULLTEXT INDEX ft_knowledge_keywords (keywords, title)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客服知识库表';
 
+-- ------------------------------------------------------------
+-- 旧表补列（MySQL 兼容写法）
+-- 注意：MySQL 从未支持 ALTER TABLE ... ADD COLUMN IF NOT EXISTS，
+--       那是 MariaDB 的扩展语法；MySQL 5.7 / 8.0 / 8.4 执行都会报
+--       ERROR 1064 并中断整个脚本。这里改为先查 information_schema
+--       再动态拼 DDL，幂等且全版本可用：列已存在时直接跳过。
+-- ------------------------------------------------------------
+DROP PROCEDURE IF EXISTS add_column_if_missing;
+DELIMITER $$
+CREATE PROCEDURE add_column_if_missing(
+    IN p_table VARCHAR(64),
+    IN p_column VARCHAR(64),
+    IN p_definition TEXT
+)
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = p_table
+          AND COLUMN_NAME = p_column
+    ) THEN
+        SET @ddl = CONCAT('ALTER TABLE `', p_table, '` ADD COLUMN `', p_column, '` ', p_definition);
+        PREPARE stmt FROM @ddl;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
+END$$
+DELIMITER ;
+
+CALL add_column_if_missing('knowledge', 'doc_type', 'VARCHAR(32) NOT NULL DEFAULT ''rule'' COMMENT ''知识类型: rule=业务规则, product=商品特征''');
+CALL add_column_if_missing('knowledge', 'source_id', 'BIGINT DEFAULT NULL COMMENT ''来源ID，product 类型对应商品ID''');
+CALL add_column_if_missing('knowledge', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT ''更新时间''');
+
+DROP PROCEDURE IF EXISTS add_column_if_missing;
+
+-- 补索引：同样按存在性判断，避免重复执行报 ERROR 1061
+DROP PROCEDURE IF EXISTS add_index_if_missing;
+DELIMITER $$
+CREATE PROCEDURE add_index_if_missing(
+    IN p_table VARCHAR(64),
+    IN p_index VARCHAR(64),
+    IN p_definition TEXT
+)
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = p_table
+          AND INDEX_NAME = p_index
+    ) THEN
+        SET @ddl = CONCAT('ALTER TABLE `', p_table, '` ADD ', p_definition);
+        PREPARE stmt FROM @ddl;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
+END$$
+DELIMITER ;
+
+CALL add_index_if_missing('knowledge', 'idx_knowledge_doc_type', 'INDEX idx_knowledge_doc_type (doc_type)');
+CALL add_index_if_missing('knowledge', 'idx_knowledge_source_id', 'INDEX idx_knowledge_source_id (source_id)');
+CALL add_index_if_missing('knowledge', 'idx_knowledge_doc_type_category', 'INDEX idx_knowledge_doc_type_category (doc_type, category)');
+
+DROP PROCEDURE IF EXISTS add_index_if_missing;
+
+UPDATE knowledge SET doc_type = 'rule' WHERE doc_type IS NULL OR doc_type = '';
+
 START TRANSACTION;
 
-DELETE FROM knowledge;
+-- 只重置规则知识，保留 scripts/build_product_kb.py 生成的商品特征 chunk
+DELETE FROM knowledge WHERE doc_type = 'rule';
 ALTER TABLE knowledge AUTO_INCREMENT = 1;
 
 INSERT INTO knowledge (category, title, content, keywords) VALUES

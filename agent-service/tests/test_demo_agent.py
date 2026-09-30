@@ -40,6 +40,23 @@ class FakeEcommerce:
     async def get_product_detail(self, product_id: int):
         return {"id": product_id, "name": "入门手机", "price": 1999, "stock": 10}
 
+    async def get_addresses(self, access_token: str | None):
+        return [
+            {"id": 7, "isDefault": 0},
+            {"id": 8, "isDefault": 1},
+        ]
+
+    async def get_cart(self, access_token: str | None):
+        return [
+            {
+                "cartId": 7,
+                "productId": 1,
+                "productName": "入门手机",
+                "price": 1999,
+                "quantity": 1,
+            }
+        ]
+
     async def add_to_cart(self, product_id: int, quantity: int, access_token: str | None):
         self.cart_adds.append((product_id, quantity, access_token))
         return None
@@ -78,6 +95,47 @@ async def test_demo_agent_filters_products_by_budget():
     assert "入门手机" in result.answer
     assert "旗舰手机" not in result.answer
     assert result.tool_calls[0].name == "search_products"
+
+
+@pytest.mark.asyncio
+async def test_demo_agent_recommends_by_budget_without_a_product_keyword():
+    registry = ToolRegistry(FakeEcommerce(), ConfirmationStore())
+    agent = DemoAgentService(registry, state_store=ConversationStateStore())
+    await agent.chat("推荐耳机", session_id="session-budget-only", access_token=None)
+
+    result = await agent.chat(
+        "推荐 3000 元以内有库存的商品",
+        session_id="session-budget-only",
+        access_token=None,
+    )
+
+    assert result.tool_calls[0].name == "search_products"
+    assert result.tool_calls[0].arguments == {
+        "keyword": "",
+        "max_price": 3000.0,
+        "in_stock": True,
+    }
+    assert "入门手机" in result.answer
+    assert "请告诉我你想搜索什么商品" not in result.answer
+    assert result.reference is None
+
+
+@pytest.mark.asyncio
+async def test_demo_agent_hides_internal_ids_and_raw_fields_in_customer_copy():
+    registry = ToolRegistry(FakeEcommerce(), ConfirmationStore())
+    agent = DemoAgentService(registry)
+
+    products = await agent.chat("推荐手机", session_id="copy-products", access_token=None)
+    cart = await agent.chat("查看购物车", session_id="copy-cart", access_token="jwt")
+    order = await agent.chat("查看订单 8", session_id="copy-order", access_token="jwt")
+
+    assert "#1" not in products.answer
+    assert "cartId" not in cart.answer
+    assert "• 7 ·" not in cart.answer
+    assert "id:" not in order.answer
+    assert "paymentStatus" not in order.answer
+    assert "订单号：ORD-8" in order.answer
+    assert "支付状态：待确认" in order.answer
 
 
 @pytest.mark.asyncio
@@ -184,6 +242,25 @@ async def test_demo_agent_adds_referenced_product_to_cart_without_confirmation()
 
 
 @pytest.mark.asyncio
+async def test_demo_agent_resolves_cart_action_by_product_name():
+    registry = ToolRegistry(FakeEcommerce(), ConfirmationStore())
+    state_store = ConversationStateStore()
+    agent = DemoAgentService(registry, state_store=state_store)
+
+    await agent.chat("查看购物车", session_id="session-cart-name", access_token="jwt")
+    result = await agent.chat(
+        "从购物车移除「入门手机」",
+        session_id="session-cart-name",
+        access_token="jwt",
+    )
+
+    assert result.confirmation is not None
+    assert result.confirmation.arguments["product_name"] == "入门手机"
+    assert "入门手机" in result.answer
+    assert "cartId" not in result.answer
+
+
+@pytest.mark.asyncio
 async def test_demo_agent_keeps_anonymous_product_context_after_login():
     ecommerce = FakeEcommerce()
     registry = ToolRegistry(ecommerce, ConfirmationStore())
@@ -226,8 +303,26 @@ async def test_demo_agent_create_order_requires_confirmation():
     assert result.tool_calls[0].outcome == "confirmation_required"
     assert result.confirmation is not None
     assert result.confirmation.arguments["product_id"] == 1
-    assert result.confirmation.arguments["address_id"] == 1
+    assert result.confirmation.arguments["address_id"] == 8
     assert result.confirmation.arguments["payment_method"] == "DEMO"
+
+
+@pytest.mark.asyncio
+async def test_create_order_requires_an_address_owned_by_current_user():
+    class NoAddressEcommerce(FakeEcommerce):
+        async def get_addresses(self, access_token: str | None):
+            return []
+
+    registry = ToolRegistry(NoAddressEcommerce(), ConfirmationStore())
+    result = await registry.execute(
+        "create_order",
+        {"product_id": 1, "quantity": 1},
+        session_id="session-no-address",
+        access_token="jwt",
+    )
+
+    assert result.outcome == "error"
+    assert "请先添加收货地址" in result.output["error"]
 
 
 @pytest.mark.asyncio

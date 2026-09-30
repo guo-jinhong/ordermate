@@ -102,7 +102,8 @@ document.addEventListener("click", (event) => {
   }
   messageInput.value = promptButton.dataset.prompt;
   resizeComposer();
-  messageInput.focus();
+  // 优化：直接提交表单，实现一键操作闭环
+  chatForm.requestSubmit();
 });
 
 pendingActionContinue.addEventListener("click", () => {
@@ -720,6 +721,15 @@ function inspectorEventPresentation(event) {
   if (event.type === "reference") return { title: "解析业务引用", summary: `已定位${data.type === "order" ? "订单" : "商品"}引用。`, tone: "success" };
   if (event.type === "clarification") return { title: "等待补充信息", summary: data.message || "需要用户补充信息。", tone: "warning" };
   if (event.type === "confirmation_required") return { title: "等待风险确认", summary: "高风险操作已暂停，等待用户确认。", tone: "warning" };
+  if (event.type === "llm_trace") {
+    const calls = (data.calls || [])
+      .map((call) => {
+        const detail = `${formatObservedTime(call.latency_ms)}` + (call.total != null ? ` · ${call.total} tok` : "") + (call.model ? ` · ${call.model}` : "");
+        return call.error ? `${detail} · 调用失败` : detail;
+      })
+      .join("；");
+    return { title: "模型调用观测", summary: calls || "本次未产生模型调用。", tone: "neutral" };
+  }
   if (event.type === "tool") {
     const ok = data.outcome !== "error";
     return { title: toolBusinessLabel(data.name), summary: `${formatOutcome(data.outcome)}${data.result_message ? ` · ${data.result_message}` : ""}`, tone: ok ? "success" : "error" };

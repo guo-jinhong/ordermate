@@ -3,7 +3,16 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app.clients.ecommerce_client import EcommerceClient
+from app.clients.ecommerce_client import EcommerceApiError, EcommerceClient
+
+
+@pytest.mark.asyncio
+async def test_local_backend_bypasses_environment_proxy():
+    client = EcommerceClient("http://127.0.0.1:8080/api")
+    try:
+        assert client._client._trust_env is False
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -68,3 +77,30 @@ async def test_search_products_sends_created_after(monkeypatch):
     assert seen_params["maxPrice"] == "3000"
     assert seen_params["inStock"] == "true"
     assert seen_params["createdAfter"] == "2026-07-01"
+
+
+@pytest.mark.asyncio
+async def test_repeated_backend_5xx_exposes_structured_retryable_error(monkeypatch):
+    transport = httpx.MockTransport(lambda request: httpx.Response(503, json={"message": "down"}))
+    client = EcommerceClient(
+        "http://backend.test/api",
+        max_retries=1,
+        backoff_seconds=[0],
+    )
+    replacement = httpx.AsyncClient(
+        base_url="http://backend.test/api",
+        transport=transport,
+    )
+    await client._client.aclose()
+    monkeypatch.setattr(client, "_client", replacement)
+
+    try:
+        with pytest.raises(EcommerceApiError) as captured:
+            await client.search_products("手机")
+    finally:
+        await client.close()
+
+    assert str(captured.value) == "业务服务暂时异常，请稍后重试。"
+    assert captured.value.code == "ECOMMERCE_BACKEND_5XX"
+    assert captured.value.status_code == 503
+    assert captured.value.retryable is True

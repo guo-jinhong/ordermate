@@ -1,0 +1,45 @@
+services:
+  embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cuda-1.9
+    profiles: ["rag-gpu"]
+    command: ["--model-id", "BAAI/bge-m3"]
+    gpus: all
+    volumes:
+      - huggingface-data:/data
+    ports:
+      - "127.0.0.1:8082:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cuda-1.9
+    profiles: ["rag-gpu"]
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3"]
+    gpus: all
+    volumes:
+      - huggingface-data:/data
+    ports:
+      - "127.0.0.1:8083:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  agent:
+    environment:
+      EMBEDDING_API_KEY: "local-tei"
+      EMBEDDING_MODEL: "text-embeddings-inference"
+      EMBEDDING_BASE_URL: "http://embedding/v1"
+      RERANK_BASE_URL: "http://reranker"
+    depends_on:
+      embedding:
+        condition: service_healthy
+      reranker:
+        condition: service_healthy
+
+volumes:
+  huggingface-data:

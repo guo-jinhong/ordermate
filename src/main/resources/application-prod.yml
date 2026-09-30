@@ -42,3 +42,10 @@ server:
   error:
     include-stacktrace: never
     include-message: never
+
+# 订单相关配置（支持环境变量覆盖，便于运维调参）
+order:
+  payment-timeout-minutes: ${ORDER_PAYMENT_TIMEOUT_MINUTES:15}
+  timeout-scheduler:
+    fixed-delay-ms: ${ORDER_TIMEOUT_SCHEDULER_FIXED_DELAY_MS:60000}
+    batch-size: ${ORDER_TIMEOUT_SCHEDULER_BATCH_SIZE:100}

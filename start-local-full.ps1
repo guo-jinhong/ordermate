@@ -52,6 +52,12 @@ function Import-DotEnv {
         $name, $value = $trimmed.Split("=", 2)
         $name = $name.Trim()
         $value = $value.Trim().Trim('"').Trim("'")
+        # 剥掉行内注释：MYSQL_PASSWORD=123456  # 说明 这种写法会把注释读进值里。
+        # 只在 "#" 前有空白时才算注释，避免误伤含 # 的合法值（如密码、URL fragment）。
+        $commentIndex = $value.IndexOf(" #")
+        if ($commentIndex -ge 0) {
+            $value = $value.Substring(0, $commentIndex).Trim()
+        }
         if ($name) {
             [Environment]::SetEnvironmentVariable($name, $value, "Process")
         }
@@ -238,33 +244,53 @@ function Invoke-MySql {
     }
 }
 
+function Copy-SqlFileAsUtf8Bom {
+    <#
+        把 SQL 脚本复制到 ASCII 临时路径，并写成带 UTF-8 BOM 的文件。
+
+        为什么要这么做：
+        1. PowerShell 管道（Get-Content | mysql.exe）在 Windows 上会把文本转成
+           UTF-16/本地代码页再写入子进程 stdin，中文会变成 ? 或乱码；DELIMITER
+           这类多行语句经管道也容易出错。
+        2. mysql.exe 配合 --default-character-set=utf8mb4 读取文件时，文件带
+           UTF-8 BOM 才能正确识别为 UTF-8，中文注释和 INSERT 数据不会损坏。
+        3. 改用 cmd 的 < 重定向走真实文件描述符；临时路径保持 ASCII，规避
+           中文路径在 cmd.exe 下被误解析。
+    #>
+    param([string]$Path)
+
+    $utf8Bom = [System.Text.UTF8Encoding]::new($true)
+    $text = [System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($false))
+    $tempFile = Join-Path $env:TEMP ("ordermate-sql-" + [guid]::NewGuid().ToString("N") + ".sql")
+    [System.IO.File]::WriteAllText($tempFile, $text, $utf8Bom)
+    return $tempFile
+}
+
 function Invoke-MySqlFile {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "SQL file was not found: $Path"
     }
-    if ($script:useDockerMySql) {
-        Get-Content -Raw -Encoding UTF8 -Path $Path | & $script:dockerExe compose exec -T mysql mysql `
-            -h 127.0.0.1 `
-            -P 3306 `
-            -u $MySqlUser `
-            "-p$MySqlPassword" `
-            --default-character-set=utf8mb4
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to run SQL file in Docker MySQL: $Path"
+
+    $tempFile = Copy-SqlFileAsUtf8Bom -Path $Path
+    $redirection = '< "' + $tempFile + '"'
+    try {
+        if ($script:useDockerMySql) {
+            & cmd.exe /c ('"{0}" compose exec -T mysql mysql -h 127.0.0.1 -P 3306 -u {1} -p{2} --default-character-set=utf8mb4 {3}' -f `
+                    $script:dockerExe, $MySqlUser, $MySqlPassword, $redirection)
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to run SQL file in Docker MySQL: $Path"
+            }
+            return
         }
-        return
-    }
-    $args = @(
-        "-h", $MySqlHost,
-        "-P", "$MySqlPort",
-        "-u", $MySqlUser,
-        "-p$MySqlPassword",
-        "--default-character-set=utf8mb4"
-    )
-    Get-Content -Raw -Encoding UTF8 -Path $Path | & $script:mysqlExe @args
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to run SQL file: $Path"
+
+        & cmd.exe /c ('"{0}" -h {1} -P {2} -u {3} -p{4} --default-character-set=utf8mb4 {5}' -f `
+                $script:mysqlExe, $MySqlHost, "$MySqlPort", $MySqlUser, $MySqlPassword, $redirection)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to run SQL file: $Path"
+        }
+    } finally {
+        Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
     }
 }
 

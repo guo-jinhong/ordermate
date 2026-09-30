@@ -63,6 +63,10 @@ public class Order {
 
     private String remark;
 
+    // 订单支付超时时间，超过此时间仍未支付则系统自动取消并释放库存
+    @Column(name = "expire_at")
+    private LocalDateTime expireAt;
+
     @Column(name = "created_at", columnDefinition = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     private LocalDateTime createdAt;
 

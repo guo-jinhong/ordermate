@@ -67,6 +67,9 @@ class EvalEcommerce:
     async def get_cart(self, access_token: str | None):
         return []
 
+    async def get_addresses(self, access_token: str | None):
+        return [{"id": 1, "isDefault": 1}]
+
     async def add_to_cart(self, product_id: int, quantity: int, access_token: str | None):
         return {"cart_id": 1, "product_id": product_id, "quantity": quantity}
 

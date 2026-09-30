@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatRequest(BaseModel):
@@ -82,7 +82,26 @@ class ConfirmResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    model_config = ConfigDict(exclude_none=True)
     status: str
     model_configured: bool
     agent_mode: str
+    serving_mode: str
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    embedding_mode: str
+    fallback_reason: str | None = None
     backend_base_url: str
+    checks: dict[str, str] | None = None
+
+
+class RuntimeConfigResponse(BaseModel):
+    force_demo: bool = False
+    disabled_tools: list[str] = Field(default_factory=list)
+    max_tool_rounds: int | None = None
+
+
+class ReloadKnowledgeResponse(BaseModel):
+    ok: bool
+    rule_count: int
+    product_count: int

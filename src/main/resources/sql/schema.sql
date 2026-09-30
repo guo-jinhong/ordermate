@@ -130,12 +130,15 @@ CREATE TABLE IF NOT EXISTS orders (
     shipped_at        DATETIME       NULL,
     delivered_at      DATETIME       NULL,
     remark            VARCHAR(500)   NULL,
+    expire_at         DATETIME       NULL COMMENT 'order payment expiration time, auto-cancel if unpaid after this',
     created_at        TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at        TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uk_orders_order_no (order_no),
     KEY idx_orders_user (user_id),
     KEY idx_orders_status (status),
+    -- 联合索引：支撑超时订单扫描（status=0 AND expire_at < now）走索引，避免全表扫描
+    KEY idx_orders_status_expire (status, expire_at),
     CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

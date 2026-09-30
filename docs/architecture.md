@@ -61,7 +61,9 @@ MySQL 中主要业务表包括用户、地址、分类、商品、购物车、�
 
 - `demo`：确定性规则 Agent，不依赖模型网络。
 - `live`：调用 OpenAI-compatible 模型接口。
-- `auto`：存在 Key 时使用 live，否则使用 demo。
+- `auto`：存在 Key 时优先使用 live；模型供应商不可用时在当前请求降级到 demo，并通过健康检查暴露 `demo_fallback` 状态。
+
+聊天推理与 Embedding 是两个独立供应商边界。Embedding 未配置时知识库使用词法检索，不会把聊天模型的 Key、Base URL 或模型名隐式复用到向量接口。
 
 ## 生产化缺口
 

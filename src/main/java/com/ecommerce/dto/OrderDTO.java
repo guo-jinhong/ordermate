@@ -25,6 +25,7 @@ public class OrderDTO {
     private Integer paymentStatus;
     private String paymentMethod;
     private String remark;
+    private LocalDateTime expireAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private List<OrderItemDTO> items;

@@ -111,6 +111,15 @@ class EcommerceClient:
             logger.error(f"获取商品详情失败: {e}")
             raise EcommerceApiError(f"获取商品详情失败: {e}") from e
 
+    async def get_addresses(self, access_token: str | None) -> list[dict[str, Any]]:
+        """获取当前用户的收货地址。"""
+        try:
+            user_id = self._parse_user_id(access_token)
+            return self._run_sync(self.repo.get_user_addresses, user_id)
+        except Exception as e:
+            logger.error(f"获取收货地址失败: {e}")
+            raise EcommerceApiError(f"获取收货地址失败: {e}") from e
+
     # ============================================================
     # 订单相关（接口签名：access_token）
     # ============================================================

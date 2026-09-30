@@ -2,17 +2,19 @@
 
 ## 最近验证结果
 
-验证日期：2026-08-10。
+验证日期：2026-09-28。
 
 | 范围 | 命令 | 结果 |
 | --- | --- | --- |
-| Java 单元测试 | `.\mvnw.cmd test` | 26 passed |
-| Python Agent 与前端契约 | `python -m pytest -q` | 136 passed，1 warning |
-| Compose 配置 | `docker compose config --services` | mysql、backend、agent |
+| Java 单元测试 | `.\mvnw.cmd test` | 28 passed |
+| Python Agent | `python -m pytest -q`（分组验证） | 155 passed，1 warning |
+| Vue | `npm run validate` | 141 passed + 5 项产物契约 |
+| DeepSeek 契约 | `/models` + 最小 Tool Calling | 鉴权、`deepseek-v4-pro`、函数调用通过 |
+| Compose 配置 | `docker compose config --services` | mysql、backend、agent、frontend |
 
 Python 警告来自 FastAPI TestClient 依赖中的 Starlette 弃用提示，不影响当前测试结果；后续升级依赖时应重新评估。
 
-本次尚未在本文档中声明 Docker 容器冷启动和 live 模型调用通过，这两项需要后续独立验收。
+本次已验证 DeepSeek 官方接口与 Tool Calling，但尚未声明 Docker 冷启动及“Vue → Agent → DeepSeek → Java → MySQL”完整 live 链路通过；完整环境验收仍需单独执行。
 
 ## Java 测试
 

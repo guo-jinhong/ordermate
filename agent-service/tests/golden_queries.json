@@ -1,0 +1,73 @@
+[
+  {
+    "query": "怎么取消订单",
+    "doc_type": "rule",
+    "expected_ids": [
+      "after-sales-cancellation"
+    ]
+  },
+  {
+    "query": "能退钱吗",
+    "doc_type": "rule",
+    "expected_ids": [
+      "after-sales-refund"
+    ]
+  },
+  {
+    "query": "退款流程是什么",
+    "doc_type": "rule",
+    "expected_ids": [
+      "after-sales-refund"
+    ]
+  },
+  {
+    "query": "取消后钱什么时候到账",
+    "doc_type": "rule",
+    "expected_ids": [
+      "after-sales-cancellation",
+      "after-sales-refund"
+    ]
+  },
+  {
+    "query": "手机有什么配置",
+    "doc_type": "product",
+    "expected_ids": [
+      "product-smartphone-x"
+    ]
+  },
+  {
+    "query": "笔记本电脑参数",
+    "doc_type": "product",
+    "expected_ids": [
+      "product-laptop-pro-14"
+    ]
+  },
+  {
+    "query": "Smartphone X 屏幕多大",
+    "doc_type": "product",
+    "expected_ids": [
+      "product-smartphone-x"
+    ]
+  },
+  {
+    "query": "Laptop Pro 14 续航",
+    "doc_type": "product",
+    "expected_ids": [
+      "product-laptop-pro-14"
+    ]
+  },
+  {
+    "query": "退货政策",
+    "doc_type": "rule",
+    "expected_ids": [
+      "after-sales-refund"
+    ]
+  },
+  {
+    "query": "订单可以撤销吗",
+    "doc_type": "rule",
+    "expected_ids": [
+      "after-sales-cancellation"
+    ]
+  }
+]

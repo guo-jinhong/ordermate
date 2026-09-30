@@ -3,6 +3,7 @@ package com.ecommerce.config;
 import com.ecommerce.security.JwtAuthenticationFilter;
 import com.ecommerce.security.LoginRateLimitFilter;
 import com.ecommerce.security.RegisterRateLimitFilter;
+import com.ecommerce.security.TraceIdFilter;
 import com.ecommerce.util.JwtTokenProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -44,6 +45,11 @@ public class SecurityConfig {
     }
 
     @Bean
+    public TraceIdFilter traceIdFilter() {
+        return new TraceIdFilter();
+    }
+
+    @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration authenticationConfiguration)
             throws Exception {
         return authenticationConfiguration.getAuthenticationManager();
@@ -70,6 +76,9 @@ public class SecurityConfig {
                         .requestMatchers("/products/**", "/categories/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
+                // 自定义 Filter 不能作为另一个 Filter 的排序锚点，除非它已经有
+                // Spring Security 注册的顺序；统一挂到框架内置锚点可避免启动失败。
+                .addFilterBefore(traceIdFilter(), UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(registerRateLimitFilter(), UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(loginRateLimitFilter(), UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class);

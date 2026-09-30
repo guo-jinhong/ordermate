@@ -2,12 +2,13 @@
 
 ## 部署组成
 
-默认 Docker Compose 启动三个服务：
+默认 Docker Compose 启动四个服务：
 
 ```text
-mysql   MySQL 8
-backend Spring Boot
-agent   FastAPI Agent 与聊天前端
+mysql     MySQL 8
+backend   Spring Boot
+agent     FastAPI Agent
+frontend  Nginx + Vue 3 静态资源（主入口，反代 Agent API）
 ```
 
 Redis 是可选外部依赖，默认 Compose 不启动。只有配置 `REDIS_URL` 后才启用会话和检查点持久化。
@@ -17,7 +18,7 @@ Redis 是可选外部依赖，默认 Compose 不启动。只有配置 `REDIS_URL
 前置条件：Docker Desktop 或 Linux Docker Engine + Compose v2。
 
 ```powershell
-docker compose up --build -d
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
 docker compose ps
 ```
 
@@ -27,13 +28,15 @@ docker compose ps
 | --- | ---: | ---: |
 | MySQL | 3306 | 3307 |
 | Java backend | 8080 | 8080 |
-| Agent | 8000 | 8000 |
+| Agent | 8000 | 8000（仅 127.0.0.1） |
+| Frontend (Nginx+Vue) | 80 | 8081 |
 
 访问：
 
-- <http://localhost:8000>
-- <http://localhost:8000/docs>
-- <http://localhost:8080/api/doc.html>
+- Vue 主入口：<http://localhost:8081>
+- 原生回退入口：<http://localhost:8081/legacy/>
+- Agent API：<http://localhost:8000/docs>
+- Java API：<http://localhost:8080/api/doc.html>
 
 停止但保留数据：
 
@@ -63,12 +66,14 @@ Copy-Item .env.docker.example .env
 | `MYSQL_ROOT_PASSWORD` | `123456` | 必须换成强密码 |
 | `JWT_SECRET` | 本地演示值 | 必须换成长随机值 |
 | `BACKEND_HOST_PORT` | `8080` | 通常不直接公网开放 |
-| `AGENT_HOST_PORT` | `8000` | 由反向代理访问 |
+| `AGENT_HOST_PORT` | `127.0.0.1:8000` | 生产不映射，仅通过 frontend 反代 |
+| `FRONTEND_HOST_PORT` | `8081` | 公网入口端口 |
 | `AGENT_MODE` | `demo` | 按需求选择 demo/live |
 | `OPENAI_API_KEY` | 空 | live 模式必填且不得提交 |
 | `OPENAI_MODEL` | `gpt-5.4-mini` | 填写供应商当前可用模型名 |
 | `OPENAI_BASE_URL` | 空 | DeepSeek 可使用兼容 API 地址 |
 | `REDIS_URL` | 空 | 可选，必须能从 Agent 容器访问 |
+| `PUBLIC_READONLY` | `true` | 共享账号下禁用写操作，实现账号隔离后可设为 false |
 | `CORS_ALLOWED_ORIGINS` | 空 | 生产 Java 服务必须配置明确域名 |
 
 DeepSeek live 示例：
@@ -126,22 +131,47 @@ docker compose ps
 
 ## Nginx 与 SSE
 
-示例 `/etc/nginx/sites-available/ordermate.conf`：
+Vue 前端容器内置 Nginx（`frontend/nginx.conf`），承担以下职责：
+
+- 托管 Vue `dist` 静态资源，SPA 前端路由 fallback 到 `index.html`
+- 反代 `/health`、`/auth/*`、`/chat/*`、`/confirm`、`/conversation/*` 到 `agent:8000`
+- SSE 路由 `/chat/stream` 关闭缓冲与缓存，读取超时 300s
+- 公网安全门禁：`/admin/*` 和 `/metrics` 返回 403
+- 全局限流：20 req/s，突发 40
+- 传递真实 IP：`X-Real-IP`、`X-Forwarded-For`、`X-Forwarded-Proto`
+- 原生回退入口：`/legacy/` 代理到 Agent 原生静态页面
+
+关键 SSE 配置：
+
+```nginx
+location = /chat/stream {
+    proxy_pass http://agent:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    chunked_transfer_encoding on;
+    proxy_read_timeout 300s;
+}
+```
+
+Agent 端通过 `--proxy-headers --forwarded-allow-ips=frontend` 只信任 Nginx 的代理头，防止客户端伪造 `X-Forwarded-For`。
+
+如需在服务器外层再套一层 Nginx（HTTPS 终端），参考：
 
 ```nginx
 server {
-    listen 80;
+    listen 443 ssl;
     server_name your-domain.example;
 
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:8081;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
-        proxy_cache off;
         proxy_read_timeout 300s;
     }
 }
@@ -153,8 +183,6 @@ server {
 sudo nginx -t
 sudo systemctl reload nginx
 ```
-
-SSE 需要关闭代理缓冲，并给予足够读取超时。
 
 ## HTTPS
 
@@ -190,19 +218,23 @@ docker compose ps
 3. 重新执行 `docker compose build` 和 `up -d`。
 4. 只有发生不兼容数据变更且确认必要时，才从备份恢复数据库。
 
-当前项目尚未引入数据库迁移工具，因此正式生产化前应先增加 Flyway/Liquibase，避免依赖手工 SQL 回滚。
+数据库结构由 Flyway 版本化管理。应用启动时执行向前迁移；生产回滚默认只回滚应用镜像，涉及不兼容数据变更时必须使用升级前备份恢复，不执行未经验证的手工逆向 SQL。
 
 ## 生产检查清单
 
-- Java 与 Python 全量测试通过。
-- Docker 冷启动和健康检查通过。
+- Java、Python、Vue 全量测试通过。
+- Docker 冷启动和健康检查通过（mysql、backend、agent、frontend）。
 - `.env` 不在 Git 跟踪中。
 - 默认数据库密码、JWT Secret 已替换。
 - CORS 只允许正式域名。
 - HTTPS 已启用。
 - 数据库和调试端口未暴露公网。
+- `/admin/*` 和 `/metrics` 经 Nginx 返回 403。
+- Nginx 限流已生效，真实 IP 正确传递。
+- Uvicorn 仅信任 `frontend` 代理头（`--forwarded-allow-ips=frontend`）。
+- `PUBLIC_READONLY=true` 时写操作（购物车/下单/支付/取消/退款）返回 403。
 - live 模式模型名、Key、配额和超时已验证。
-- SSE 经过 Nginx 实际验证。
+- SSE 经过 Nginx 实际验证（逐帧到达）。
 - 备份、恢复和回滚完成演练。
 - 日志、录屏和截图没有暴露密钥或完整令牌。
 

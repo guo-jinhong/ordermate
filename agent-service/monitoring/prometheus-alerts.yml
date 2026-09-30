@@ -1,0 +1,63 @@
+# Prometheus Alert Rules for E-Commerce Agent Service
+# 导入方式: 将此文件放到 Prometheus 的 rule_files 目录，或通过 prometheus operator 的 PrometheusRule CRD
+
+groups:
+  - name: ecommerce-agent
+    rules:
+      # OBS-2: LLM 失败率告警
+      - alert: LLMCallsHighFailureRate
+        expr: |
+          sum(rate(agent_llm_calls_total{outcome!="success"}[5m]))
+          /
+          sum(rate(agent_llm_calls_total[5m]))
+          > 0.2
+        for: 5m
+        labels:
+          severity: critical
+          service: ecommerce-agent
+        annotations:
+          summary: "LLM 调用失败率超过 20%"
+          description: "最近 5 分钟 LLM 失败率 {{ $value | humanizePercentage }}，可能模型服务异常"
+
+      # OBS-2: 接口错误率告警
+      - alert: ChatAPIHighErrorRate
+        expr: |
+          sum(rate(agent_chat_requests_total{status="error"}[5m]))
+          /
+          sum(rate(agent_chat_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: ecommerce-agent
+        annotations:
+          summary: "Chat 接口错误率超过 5%"
+          description: "最近 5 分钟接口错误率 {{ $value | humanizePercentage }}，请检查 Agent 服务"
+
+      # OBS-2: 知识库命中率告警
+      - alert: KBLowHitRate
+        expr: |
+          sum(rate(agent_kb_hit_total[10m]))
+          /
+          sum(rate(agent_kb_search_total[10m]))
+          < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: ecommerce-agent
+        annotations:
+          summary: "知识库命中率低于 50%"
+          description: "最近 10 分钟知识库命中率 {{ $value | humanizePercentage }}，可能需要补充或优化知识库"
+
+      # OBS-2: 接口延迟告警
+      - alert: ChatAPIHighLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(agent_chat_latency_seconds_bucket[5m])) by (le))
+          > 30
+        for: 5m
+        labels:
+          severity: warning
+          service: ecommerce-agent
+        annotations:
+          summary: "Chat 接口 p95 延迟超过 30s"
+          description: "最近 5 分钟 p95 延迟 {{ $value }}s，请检查 LLM 响应或后端 API"

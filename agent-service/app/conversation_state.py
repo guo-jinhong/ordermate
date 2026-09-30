@@ -142,6 +142,17 @@ class ConversationState:
             for token in _product_name_tokens(str(name)):
                 if token in normalized_message:
                     return int(product_id)
+        for item in self.cart_items:
+            product_id = item.get("productId")
+            name = item.get("productName")
+            if product_id is None or not name:
+                continue
+            normalized_name = _normalize_product_text(str(name))
+            if normalized_name and normalized_name in normalized_message:
+                return int(product_id)
+            for token in _product_name_tokens(str(name)):
+                if token in normalized_message:
+                    return int(product_id)
         return None
 
     def product_name_for_id(self, product_id: int | None) -> str | None:
@@ -211,6 +222,14 @@ class ConversationState:
             if item.get("cartId") == cart_id:
                 quantity = item.get("quantity")
                 return int(quantity) if quantity is not None else None
+        return None
+
+    def cart_product_name_for_id(self, cart_id: int | None) -> str | None:
+        if cart_id is None:
+            return None
+        for item in self.cart_items:
+            if item.get("cartId") == cart_id and item.get("productName"):
+                return str(item["productName"])
         return None
 
     def remember_confirmation(self, token: str, action: str, arguments: dict[str, object]) -> None:
@@ -292,14 +311,21 @@ class ConversationStateStore:
         self,
         *,
         ttl_seconds: int = 1800,
+        max_sessions: int = 10000,
+        cleanup_interval_seconds: int = 600,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if ttl_seconds < 1:
             raise ValueError("ttl_seconds must be positive")
+        if max_sessions < 1:
+            raise ValueError("max_sessions must be positive")
         self._ttl_seconds = ttl_seconds
+        self._max_sessions = max_sessions
+        self._cleanup_interval_seconds = cleanup_interval_seconds
         self._clock = clock
         self._states: dict[tuple[str, str], ConversationState] = {}
         self._lock = asyncio.Lock()
+        self._cleanup_task: asyncio.Task | None = None
 
     async def get(
         self, session_id: str, access_token: str | None
@@ -309,6 +335,9 @@ class ConversationStateStore:
             self._purge_expired_locked()
             state = self._states.get(key)
             if state is None:
+                # DB-2: 超过上限时淘汰最久未访问的 session
+                if len(self._states) >= self._max_sessions:
+                    self._evict_oldest_locked()
                 state = ConversationState()
                 self._states[key] = state
             if access_token and not state.has_product_context():
@@ -346,3 +375,45 @@ class ConversationStateStore:
         ]
         for key in expired:
             del self._states[key]
+
+    def _evict_oldest_locked(self) -> None:
+        """DB-2: 淘汰最久未访问的 session（max_sessions 上限保护）。"""
+        if not self._states:
+            return
+        oldest_key = min(self._states, key=lambda k: self._states[k].updated_at)
+        del self._states[oldest_key]
+
+    async def start_cleanup_task(self) -> None:
+        """DB-2: 启动后台定时清理任务，主动清理过期 session。"""
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            return
+
+        async def _cleanup_loop() -> None:
+            while True:
+                try:
+                    await asyncio.sleep(self._cleanup_interval_seconds)
+                    async with self._lock:
+                        before = len(self._states)
+                        self._purge_expired_locked()
+                        removed = before - len(self._states)
+                        if removed > 0:
+                            import logging
+                            logging.getLogger(__name__).info(
+                                f"会话清理: 移除 {removed} 个过期 session"
+                            )
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    continue
+
+        self._cleanup_task = asyncio.create_task(_cleanup_loop())
+
+    async def stop_cleanup_task(self) -> None:
+        """停止后台清理任务。"""
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None

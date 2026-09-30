@@ -8,7 +8,7 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     ports:
-      - "3307:3306"
+      - "127.0.0.1:3307:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       - ./src/main/resources/sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
@@ -40,7 +40,7 @@ services:
       mysql:
         condition: service_healthy
     ports:
-      - "${BACKEND_HOST_PORT:-8080}:8080"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8080}:8080"
     restart: unless-stopped
 
   agent:
@@ -52,6 +52,10 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      RERANK_BASE_URL: ${RERANK_BASE_URL:-}
       REDIS_URL: ${REDIS_URL:-}
       ECOMMERCE_BACKEND: api
       ECOMMERCE_API_BASE_URL: http://backend:8080/api
@@ -64,13 +68,62 @@ services:
       REQUEST_TIMEOUT_SECONDS: 20
       CONVERSATION_MAX_MESSAGES: ${CONVERSATION_MAX_MESSAGES:-12}
       CONVERSATION_TTL_SECONDS: ${CONVERSATION_TTL_SECONDS:-1800}
+      # 公网安全：共享账号下禁用写操作（购物车/下单/支付/取消/退款）
+      PUBLIC_READONLY: ${PUBLIC_READONLY:-true}
+    # 只信任 Nginx(frontend) 的代理头，防止客户端伪造 X-Forwarded-For
+    command:
+      [
+        "uvicorn", "app.main:app",
+        "--host", "0.0.0.0",
+        "--port", "8000",
+        "--proxy-headers",
+        "--forwarded-allow-ips", "frontend",
+      ]
     depends_on:
       backend:
         condition: service_started
       mysql:
         condition: service_healthy
     ports:
-      - "${AGENT_HOST_PORT:-8000}:8000"
+      # 生产环境建议不映射 agent 端口，仅通过 frontend Nginx 反代访问
+      # 本地开发可设置 AGENT_HOST_PORT=8000 直接访问
+      - "${AGENT_HOST_PORT:-127.0.0.1:8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=5).status == 200 else 1)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      agent:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-8081}:80"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "--spider",
+          "http://localhost/",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
 volumes:

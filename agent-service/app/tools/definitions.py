@@ -3,8 +3,11 @@ TOOLS = [
         "type": "function",
         "name": "search_knowledge_base",
         "description": (
-            "Search after-sales policy, refund rules, warranty rules, platform FAQ, "
-            "and product manual text. Do not use this tool for real-time product price, "
+            "Search knowledge bases. Two isolated stores exist: 'rule' for after-sales "
+            "policy, refund/shipping/warranty rules and platform FAQ; 'product' for "
+            "product attribute snippets (brand, model, specs, selling points). Choose the "
+            "store matching the user's intent — the server also routes by intent and may "
+            "override this parameter. Do not use this tool for real-time product price, "
             "stock, cart, or order data."
         ),
         "strict": True,
@@ -15,7 +18,15 @@ TOOLS = [
                     "type": "string",
                     "minLength": 1,
                     "description": "Natural-language policy/manual query.",
-                }
+                },
+                "kb": {
+                    "type": "string",
+                    "enum": ["rule", "product"],
+                    "description": (
+                        "Knowledge store to search: 'rule' for after-sales/policy/FAQ, "
+                        "'product' for product attribute snippets. Defaults to 'rule'."
+                    ),
+                },
             },
             "required": ["query"],
             "additionalProperties": False,
@@ -238,6 +249,31 @@ TOOLS = [
                     "minimum": 1,
                     "description": "Order ID.",
                 }
+            },
+            "required": ["order_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "refund_order",
+        "description": (
+            "Apply for a refund for the current logged-in user's paid or shipped order. "
+            "Requires login and explicit user confirmation before execution."
+        ),
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "order_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Order ID.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Refund reason.",
+                },
             },
             "required": ["order_id"],
             "additionalProperties": False,

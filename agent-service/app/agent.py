@@ -2,18 +2,56 @@ from __future__ import annotations
 
 import json
 import re
+import asyncio
+from contextvars import ContextVar
+import time
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from typing import Any
 
+from app.audit import AuditLogger
 from app.conversation_memory import ConversationMemoryStore
 from app.conversation_state import ConversationState, ConversationStateStore
+from app.knowledge_base import knowledge_search_intent, route_knowledge_base
 from app.product_terms import translate_product_keyword
 from app.prompts import SYSTEM_PROMPT
 from app.schemas import ChatResponse, ReferenceResolution, ToolCallRecord
 from app.tools.definitions import TOOLS
+from app.circuit_breaker import AsyncCircuitBreaker, CircuitBreakerOpenError
+from app.metrics import llm_calls_total, llm_latency_seconds
 from app.tools.registry import ToolRegistry
+
+
+_llm_trace_context: ContextVar[list[dict] | None] = ContextVar(
+    "llm_trace_context",
+    default=None,
+)
 from app.security_guard import is_suspicious_instruction
+
+
+# LLM 调用可观测埋点：复用统一审计日志，输出结构化为 JSON 的调用/失败事件
+_llm_audit = AuditLogger()
+
+
+def _usage_dict(usage: Any) -> dict | None:
+    """兼容 chat.completions 与 responses 两种 usage 命名，提取 token 统计。"""
+    if usage is None:
+        return None
+    out: dict[str, int] = {}
+    for attr in ("prompt_tokens", "input_tokens"):
+        value = getattr(usage, attr, None)
+        if value is not None:
+            out["input_tokens"] = value
+            break
+    for attr in ("completion_tokens", "output_tokens"):
+        value = getattr(usage, attr, None)
+        if value is not None:
+            out["output_tokens"] = value
+            break
+    total = getattr(usage, "total_tokens", None)
+    if total is not None:
+        out["total_tokens"] = total
+    return out or None
 
 
 def build_state_context(state: ConversationState) -> str:
@@ -266,9 +304,11 @@ def _guard_tool_call(
         return "只有用户询问商品时才会搜索商品。"
 
     if name == "search_knowledge_base":
-        if _contains_any(lowered, "退款", "售后", "规则", "政策", "参数", "配置", "保修", "policy", "refund"):
+        # 触发判定与 demo 模式共用 knowledge_search_intent（唯一词表），
+        # 见 app/knowledge_base.py 的"知识意图（唯一事实源）"。
+        if knowledge_search_intent(message):
             return None
-        return "只有用户询问规则、政策或参数时才会检索知识库。"
+        return "只有用户询问规则、政策、保修或商品参数等知识库内容时才会检索知识库。"
 
     return None
 
@@ -295,34 +335,34 @@ _TOOL_PARAM_LABELS: dict[str, dict[str, str]] = {
         "keyword": "商品关键词，例如手机、耳机、充电宝",
     },
     "get_product_detail": {
-        "product_id": "商品 ID",
+        "product_id": "商品名称或编号",
     },
     "get_cart": {},
     "add_to_cart": {
-        "product_id": "商品 ID",
+        "product_id": "商品名称或编号",
         "quantity": "加入购物车数量",
     },
     "update_cart": {
-        "cart_id": "购物车项 ID",
+        "cart_id": "购物车中的商品名称",
         "quantity": "新的商品数量",
     },
     "remove_from_cart": {
-        "cart_id": "购物车项 ID",
+        "cart_id": "购物车中的商品名称",
     },
     "clear_cart": {},
     "get_my_orders": {},
     "get_order_detail": {
-        "order_id": "订单 ID",
+        "order_id": "订单号",
     },
     "cancel_order": {
-        "order_id": "订单 ID",
+        "order_id": "订单号",
     },
     "create_order": {
-        "product_id": "商品 ID",
+        "product_id": "商品名称或编号",
         "quantity": "下单数量",
     },
     "pay_order": {
-        "order_id": "订单 ID",
+        "order_id": "订单号",
     },
     "search_knowledge_base": {
         "query": "要查询的规则、售后、FAQ 或产品手册问题",
@@ -387,6 +427,39 @@ def _is_confirmation_message(message: str) -> bool:
     }
 
 
+def _extract_order_id_from_message(message: str) -> int | None:
+    match = re.search(r"(?:订单|order)\s*#?\s*(\d+)", message, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"\b(\d+)\b", message)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _direct_cancel_order_arguments(message: str, state: ConversationState) -> dict[str, Any] | None:
+    lowered = message.lower()
+    if not _contains_any(lowered, "取消订单", "撤销订单", "作废订单", "cancel order", "revoke order"):
+        return None
+    order_id = _extract_order_id_from_message(message)
+    if order_id is None:
+        order_id = state.resolve_order_id(message, None)
+    if order_id is None:
+        recent_order = state.last_order_id
+        if recent_order is not None:
+            order_id = recent_order
+        else:
+            return None
+    return {"order_id": order_id}
+
+
+def _direct_clear_cart_arguments(message: str, state: ConversationState) -> dict[str, Any] | None:
+    lowered = message.lower()
+    if not _contains_any(lowered, "清空购物车", "清空全部", "clear cart", "empty cart"):
+        return None
+    return {}
+
+
 def _direct_add_to_cart_arguments(message: str, state: ConversationState) -> dict[str, Any] | None:
     lowered = message.lower()
     if not _contains_any(lowered, "加购物车", "加入购物车", "放购物车", "添加购物车", "add to cart", "cart"):
@@ -432,17 +505,22 @@ def _answer_for_direct_tool(
     state: ConversationState,
 ) -> str:
     if name == "add_to_cart":
-        product_name = state.product_name_for_id(arguments.get("product_id")) or f"商品 #{arguments.get('product_id')}"
+        display = execution_output.get("display")
+        display_name = display.get("product_name") if isinstance(display, dict) else None
+        product_name = display_name or state.product_name_for_id(arguments.get("product_id")) or "该商品"
         quantity = arguments.get("quantity") or 1
         if outcome == "success":
-            return f"已把 {product_name} x {quantity} 加入购物车。"
+            return f"已将「{product_name}」加入购物车，共 {quantity} 件。"
         return f"加入购物车没有成功：{execution_output.get('error', '业务系统返回错误')}。"
     if name == "update_cart":
         quantity = arguments.get("quantity")
+        data = execution_output.get("data")
+        data_name = data.get("product_name") if isinstance(data, dict) else None
+        product_name = data_name or state.cart_product_name_for_id(arguments.get("cart_id")) or "该商品"
         if outcome == "confirmation_required":
-            return f"已准备把购物车项 #{arguments.get('cart_id')} 的数量改为 {quantity}，请点击确认按钮，或直接回复“确认”。"
+            return f"已准备将「{product_name}」的数量改为 {quantity} 件，请确认后执行。"
         if outcome == "success":
-            return f"购物车数量已修改为 {quantity}。"
+            return f"已将「{product_name}」的数量修改为 {quantity} 件。"
         return f"修改购物车数量没有成功：{execution_output.get('error', '业务系统返回错误')}。"
     if name == "update_cart_items":
         quantity = arguments.get("quantity")
@@ -452,9 +530,31 @@ def _answer_for_direct_tool(
         if outcome == "success":
             return f"购物车中 {len(items)} 个商品的数量已修改为 {quantity} 件。"
         return f"批量修改购物车数量没有成功：{execution_output.get('error', '业务系统返回错误')}。"
+    if name == "cancel_order":
+        data = execution_output.get("data")
+        order_no = data.get("orderNo") if isinstance(data, dict) else None
+        order_label = order_no or state.last_order_no or "当前订单"
+        if outcome == "confirmation_required":
+            return f"已准备取消订单 {order_label}，请确认后执行。"
+        if outcome == "success":
+            return f"订单 {order_label} 已成功取消。"
+        return f"取消订单没有成功：{execution_output.get('error', '业务系统返回错误')}。"
+    if name == "clear_cart":
+        if outcome == "confirmation_required":
+            return "已准备清空购物车，请点击确认按钮，或直接回复“确认”以执行。"
+        if outcome == "success":
+            return "购物车已清空。"
+        return f"清空购物车没有成功：{execution_output.get('error', '业务系统返回错误')}。"
     if outcome == "success":
         return "操作已完成。"
     return execution_output.get("error") or "操作没有成功。"
+
+
+def _customer_order_list_answer(data: Any) -> str:
+    """订单列表使用受控文案，避免模型主动承诺未开放的支付或退款能力。"""
+    order_count = len(data) if isinstance(data, list) else 0
+    count_text = f"共 {order_count} 笔" if order_count else ""
+    return f"已查询到你的订单{count_text}。你可以查看订单详情；待支付订单还可以取消。"
 
 
 def _missing_tool_retry_message(message: str) -> str:
@@ -706,10 +806,16 @@ class AgentService:
         memory: ConversationMemoryStore | None = None,
         state_store: ConversationStateStore | None = None,
         confirmed_action_executor: Any | None = None,
+        fallback_model_client: Any | None = None,
+        fallback_model: str | None = None,
+        llm_circuit_breaker: AsyncCircuitBreaker | None = None,
     ) -> None:
         self._model_client = model_client
+        self._fallback_model_client = fallback_model_client
+        self._fallback_model = fallback_model
         self._registry = registry
         self._model = model
+        self._llm_breaker = llm_circuit_breaker or AsyncCircuitBreaker("llm")
         self._max_tool_rounds = max_tool_rounds
         self._memory = memory
         self._state_store = state_store
@@ -721,21 +827,98 @@ class AgentService:
         instructions: str,
         input_items: list[Any],
     ) -> Any:
-        if _model_uses_chat_completions(self._model) and hasattr(self._model_client, "chat"):
-            completion = await self._model_client.chat.completions.create(
-                model=self._model,
-                messages=_chat_messages_from_responses_input(instructions, input_items),
-                tools=_chat_tools_from_responses_tools(TOOLS),
-                extra_body={"thinking": {"type": "disabled"}},
-            )
-            return _responses_shape_from_chat_completion(completion)
+        start = time.monotonic()
+        error: str | None = None
+        usage: dict | None = None
 
-        return await self._model_client.responses.create(
-            model=self._model,
-            instructions=instructions,
-            tools=TOOLS,
-            input=input_items,
-        )
+        async def _call(client, model: str):
+            if _model_uses_chat_completions(model) and hasattr(client, "chat"):
+                completion = await asyncio.wait_for(
+                    client.chat.completions.create(
+                        model=model,
+                        messages=_chat_messages_from_responses_input(instructions, input_items),
+                        tools=_chat_tools_from_responses_tools(TOOLS),
+                        extra_body={"thinking": {"type": "disabled"}},
+                    ),
+                    timeout=20,
+                )
+                return _responses_shape_from_chat_completion(completion), getattr(completion, "usage", None)
+            response = await asyncio.wait_for(
+                client.responses.create(
+                    model=model,
+                    instructions=instructions,
+                    tools=TOOLS,
+                    input=input_items,
+                ),
+                timeout=20,
+            )
+            return response, getattr(response, "usage", None)
+
+        try:
+            # 熔断器保护：连续失败后直接抛 CircuitBreakerOpenError，不再打 LLM
+            try:
+                result, resp_usage = await self._llm_breaker.call(
+                    _call, self._model_client, self._model
+                )
+            except CircuitBreakerOpenError:
+                # 主模型熔断，尝试 fallback
+                if self._fallback_model_client is not None and self._fallback_model is not None:
+                    result, resp_usage = await _call(self._fallback_model_client, self._fallback_model)
+                else:
+                    raise
+            except Exception:
+                # 主模型失败，尝试 fallback（不重复计入熔断，fallback 成功也算恢复）
+                if self._fallback_model_client is not None and self._fallback_model is not None:
+                    result, resp_usage = await _call(self._fallback_model_client, self._fallback_model)
+                else:
+                    raise
+            usage = _usage_dict(resp_usage)
+            return result
+        except Exception as exc:  # noqa: BLE001 - 记录后仍需向上抛出，交由上层降级处理
+            error = str(exc)
+            raise
+        finally:
+            latency_ms = int((time.monotonic() - start) * 1000)
+            # 收集展示用埋点（键名避开 'token'，防止前端把统计数字误脱敏）
+            entry: dict[str, Any] = {"model": self._model, "latency_ms": latency_ms}
+            if error is not None:
+                entry["error"] = error
+            elif usage:
+                entry.update(
+                    input=usage.get("input_tokens"),
+                    output=usage.get("output_tokens"),
+                    total=usage.get("total_tokens"),
+                )
+                llm_calls_total.labels(model=self._model, outcome="success").inc()
+                llm_latency_seconds.observe(latency_ms / 1000.0)
+                entry = {key: value for key, value in entry.items() if value is not None}
+            trace = _llm_trace_context.get()
+            if trace is not None:
+                trace.append(entry)
+
+            if error is not None:
+                _llm_audit.emit(
+                    "llm_call_failed",
+                    model=self._model,
+                    latency_ms=latency_ms,
+                    error=error,
+                )
+                outcome = "timeout" if "Timeout" in (error or "") else "error"
+                llm_calls_total.labels(model=self._model, outcome=outcome).inc()
+                llm_latency_seconds.observe(latency_ms / 1000.0)
+            else:
+                _llm_audit.emit(
+                    "llm_call",
+                    model=self._model,
+                    latency_ms=latency_ms,
+                    **(usage or {}),
+                )
+
+    def collect_llm_trace(self) -> list[dict]:
+        """取出当前异步请求的 LLM 埋点，不与并发请求共享状态。"""
+        trace = list(_llm_trace_context.get() or [])
+        _llm_trace_context.set([])
+        return trace
 
     async def chat(
         self,
@@ -744,6 +927,7 @@ class AgentService:
         session_id: str,
         access_token: str | None,
     ) -> ChatResponse:
+        _llm_trace_context.set([])
         if is_suspicious_instruction(message):
             return ChatResponse(
                 answer="该请求包含可能绕过安全规则或获取敏感信息的指令，已被拒绝。"
@@ -800,6 +984,7 @@ class AgentService:
                     state.pending_confirmation_action,
                     state.pending_confirmation_arguments,
                     access_token,
+                    session_id,
                 )
                 state.clear_confirmation()
                 if self._memory is not None:
@@ -813,6 +998,98 @@ class AgentService:
                 if self._state_store is not None:
                     await self._state_store.save(session_id, access_token, state)
                 return ChatResponse(answer=f"确认执行失败：{exc}", tool_calls=[])
+
+        direct_cancel_arguments = _direct_cancel_order_arguments(message, state)
+        if direct_cancel_arguments is not None:
+            execution = await self._registry.execute(
+                "cancel_order",
+                direct_cancel_arguments,
+                session_id=session_id,
+                access_token=access_token,
+            )
+            execution_output = _post_process_tool_output(
+                "cancel_order", execution.output, message
+            )
+            if execution.confirmation is not None:
+                state.remember_confirmation(
+                    execution.confirmation.token,
+                    execution.confirmation.action,
+                    execution.confirmation.arguments,
+                )
+            answer = _answer_for_direct_tool(
+                "cancel_order",
+                direct_cancel_arguments,
+                execution_output,
+                execution.outcome,
+                state,
+            )
+            record = ToolCallRecord(
+                name="cancel_order",
+                arguments=direct_cancel_arguments,
+                outcome=execution.outcome,
+                result_message=execution_output.get("error") if execution.outcome == "error" else None,
+            )
+            if self._memory is not None:
+                await self._memory.append_turn(session_id, access_token, message, answer)
+            if self._state_store is not None:
+                state.turn_count += 1
+                await self._state_store.save(session_id, access_token, state)
+            return ChatResponse(
+                answer=answer,
+                tool_calls=[record],
+                confirmation=execution.confirmation,
+                data=execution_output.get("data"),
+                reference=ReferenceResolution(
+                    type="order",
+                    value=str(direct_cancel_arguments["order_id"]),
+                ),
+            )
+
+        direct_clear_arguments = _direct_clear_cart_arguments(message, state)
+        if direct_clear_arguments is not None:
+            execution = await self._registry.execute(
+                "clear_cart",
+                {},
+                session_id=session_id,
+                access_token=access_token,
+            )
+            execution_output = _post_process_tool_output(
+                "clear_cart", execution.output, message
+            )
+            if execution.confirmation is not None:
+                state.remember_confirmation(
+                    execution.confirmation.token,
+                    execution.confirmation.action,
+                    execution.confirmation.arguments,
+                )
+            answer = _answer_for_direct_tool(
+                "clear_cart",
+                {},
+                execution_output,
+                execution.outcome,
+                state,
+            )
+            record = ToolCallRecord(
+                name="clear_cart",
+                arguments={},
+                outcome=execution.outcome,
+                result_message=execution_output.get("error") if execution.outcome == "error" else None,
+            )
+            if self._memory is not None:
+                await self._memory.append_turn(session_id, access_token, message, answer)
+            if self._state_store is not None:
+                state.turn_count += 1
+                await self._state_store.save(session_id, access_token, state)
+            return ChatResponse(
+                answer=answer,
+                tool_calls=[record],
+                confirmation=execution.confirmation,
+                data=execution_output.get("data"),
+                reference=ReferenceResolution(
+                    type="cart",
+                    value="current",
+                ),
+            )
 
         direct_add_arguments = _direct_add_to_cart_arguments(message, state)
         if direct_add_arguments is not None:
@@ -916,10 +1193,13 @@ class AgentService:
             )
 
         for _ in range(self._max_tool_rounds):
-            response = await self._create_model_response(
-                instructions=system_instructions,
-                input_items=input_items,
-            )
+            try:
+                response = await self._create_model_response(
+                    instructions=system_instructions,
+                    input_items=input_items,
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError("LLM request timed out")
             function_calls = [
                 item for item in response.output if item.type == "function_call"
             ]
@@ -939,6 +1219,14 @@ class AgentService:
                 answer = response.output_text or "我无法生成回复。"
                 if forced_tool_retry and _should_retry_for_missing_tool_call(message, records):
                     answer = "我需要先查询业务系统，才能回答商品、价格、库存、购物车或订单相关问题。请换个更明确的问法再试一次。"
+                if (
+                    records
+                    and records[-1].name == "get_my_orders"
+                    and records[-1].outcome == "success"
+                    and pending_confirmation is None
+                    and not _contains_any(message.lower(), "退款", "退货", "售后", "refund", "return")
+                ):
+                    answer = _customer_order_list_answer(last_data)
                 if self._memory is not None:
                     await self._memory.append_turn(
                         session_id, access_token, message, answer
@@ -961,14 +1249,21 @@ class AgentService:
             for call in function_calls:
                 try:
                     arguments = json.loads(call.arguments)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    # B3-1: JSON 解析失败不执行工具，把具体错误和原始参数反馈给 LLM，
+                    # 让它在下一轮重新输出合法 JSON（最多重试 max_tool_rounds 次）
                     arguments = {}
                     execution_output = {
                         "ok": False,
-                        "error": "模型提供了无效的工具参数。",
+                        "error": f"工具参数不是合法 JSON：{exc.msg}（位置 {exc.pos}）。请严格按 JSON 格式重新输出工具调用参数，不要包含多余文本或注释。",
+                        "raw_arguments": call.arguments[:500],
                     }
                     outcome = "error"
                 else:
+                    if call.name == "search_knowledge_base":
+                        # 意图路由（分库隔离）：服务端根据用户消息决定检索规则库还是
+                        # 商品库，覆盖 LLM 传入的 kb 参数，防止跨库检索噪声
+                        arguments["kb"] = route_knowledge_base(message)
                     guard_error = _guard_tool_call(call.name, arguments, message, state)
                     if guard_error:
                         execution_output = {"ok": False, "error": guard_error}

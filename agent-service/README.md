@@ -6,7 +6,7 @@ FastAPI Agent 服务负责聊天 API、SSE 流式事件、模型工具调用、�
 
 - `demo`：确定性本地 Agent，无需模型 Key。
 - `live`：调用 OpenAI-compatible 模型接口。
-- `auto`：有 `OPENAI_API_KEY` 时使用 live，否则使用 demo。
+- `auto`：有 `OPENAI_API_KEY` 时优先使用 live；模型连接、超时或供应商故障时自动降级 demo。
 
 live 路径兼容 Chat Completions，并在客户端可用时支持 Responses API 回退。DeepSeek 等兼容服务通过 `OPENAI_BASE_URL` 配置。
 
@@ -59,7 +59,7 @@ Copy-Item .env.example .env
 最小 demo 配置：
 
 ```dotenv
-AGENT_MODE=demo
+AGENT_MODE=auto
 ECOMMERCE_BACKEND=api
 ECOMMERCE_API_BASE_URL=http://localhost:8080/api
 ```
@@ -72,6 +72,16 @@ OPENAI_API_KEY=本地真实Key
 OPENAI_MODEL=供应商当前支持的模型名
 OPENAI_BASE_URL=https://api.deepseek.com
 ```
+
+Embedding 使用独立的 `EMBEDDING_API_KEY`、`EMBEDDING_MODEL` 和 `EMBEDDING_BASE_URL`。未配置时自动使用词法检索，不复用聊天供应商配置。
+
+需要本地语义检索时，可在项目根目录按需启动 BGE-M3 与 reranker（需要 NVIDIA GPU，首次启动下载模型）：
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.rag.yml --profile rag-gpu up --build
+```
+
+默认 Compose 和 CI 不启动大模型服务；未配置或服务故障时自动保留词法/Hybrid 结果。
 
 其他参数见 [../docs/development.md](../docs/development.md)。
 

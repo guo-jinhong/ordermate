@@ -133,9 +133,9 @@ class RedisConversationMemoryStore:
 class RedisConfirmationStore:
     """Single-use confirmation tokens backed by Redis so restarts do not lose them."""
 
-    def __init__(self, client: Any, ttl_minutes: int = 10) -> None:
+    def __init__(self, client: Any, ttl_seconds: int = 60) -> None:
         self._client = client
-        self._ttl_seconds = int(timedelta(minutes=ttl_minutes).total_seconds())
+        self._ttl_seconds = ttl_seconds
 
     async def issue(
         self,

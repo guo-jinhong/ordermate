@@ -32,7 +32,10 @@ class FakeEcommerce:
         raise RuntimeError("invalid credentials")
 
     async def get_current_user(self, access_token: str):
-        if access_token == "test-jwt":
+        # 模拟真实后端：非空 token 视为有效（签名校验通过），只有明确失效的抛错
+        if access_token in {"expired-jwt", "invalid", ""}:
+            raise EcommerceApiError("invalid token")
+        if access_token:
             return {"id": 1, "username": "testuser"}
         raise EcommerceApiError("invalid token")
 
@@ -47,6 +50,12 @@ class FakeEcommerce:
 
     async def get_product_detail(self, product_id: int):
         return {"id": product_id, "name": "Smartphone X", "price": 2999, "stock": 30}
+
+    async def get_addresses(self, access_token: str | None):
+        return [
+            {"id": 41, "isDefault": 0},
+            {"id": 42, "isDefault": 1},
+        ]
 
     async def cancel_order(self, order_id: int, access_token: str | None):
         self.cancelled.append(order_id)
@@ -108,11 +117,49 @@ def test_health_works_without_api_key():
 
     assert response.status_code == 200
     assert response.json() == {
-        "status": "ok",
+        "status": "degraded",
         "model_configured": False,
         "agent_mode": "live",
+        "serving_mode": "live",
+        "embedding_mode": "lexical",
         "backend_base_url": "http://backend.test/api",
     }
+
+
+def test_auto_mode_falls_back_to_demo_when_live_model_is_unavailable():
+    from types import SimpleNamespace
+
+    class FailingResponses:
+        async def create(self, **kwargs):
+            raise ConnectionError("provider unavailable")
+
+    settings = Settings(
+        openai_api_key="configured",
+        openai_model="test-model",
+        openai_base_url=None,
+        ecommerce_api_base_url="http://backend.test/api",
+        request_timeout_seconds=1,
+        max_tool_rounds=3,
+        agent_mode="auto",
+    )
+    app = create_app(
+        settings,
+        model_client=SimpleNamespace(responses=FailingResponses()),
+        ecommerce_client=FakeEcommerce(),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/chat",
+            json={"message": "推荐手机", "session_id": "fallback-session"},
+        )
+        health = client.get("/health?deep=true")
+
+    assert response.status_code == 200
+    assert "Smartphone X" in response.json()["answer"]
+    assert health.json()["status"] == "degraded"
+    assert health.json()["serving_mode"] == "demo_fallback"
+    assert health.json()["fallback_reason"] == "ConnectionError"
 
 
 def test_auth_session_validates_stored_token_and_returns_username():
@@ -135,6 +182,28 @@ def test_auth_session_validates_stored_token_and_returns_username():
     assert valid.json() == {"authenticated": True, "username": "testuser"}
     assert invalid.status_code == 401
     assert invalid.json()["detail"] == "登录状态无效或已失效。"
+
+
+def test_auth_session_accepts_authorization_header_without_token_body():
+    settings = Settings(
+        openai_api_key=None,
+        openai_model="test-model",
+        openai_base_url=None,
+        ecommerce_api_base_url="http://backend.test/api",
+        request_timeout_seconds=1,
+        max_tool_rounds=3,
+        agent_mode="live",
+    )
+    app = create_app(settings, ecommerce_client=FakeEcommerce())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/session",
+            headers={"Authorization": "Bearer test-jwt"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"authenticated": True, "username": "testuser"}
 
 
 def test_chat_explains_missing_api_key():
@@ -177,6 +246,64 @@ def test_chat_stream_emits_timeline_and_result():
     assert "event: started" in response.text
     assert "event: tool" in response.text
     assert "event: result" in response.text
+
+
+def test_chat_stream_rejects_invalid_token_with_http_401_before_stream():
+    """失效 token 必须在 SSE 流开始前返回标准 HTTP 401，
+    不能先返回 200 + started 再在流内退化为 error 事件，
+    否则前端无法可靠触发重新登录。"""
+    settings = Settings(
+        openai_api_key=None, openai_model="test-model", openai_base_url=None,
+        ecommerce_api_base_url="http://backend.test/api", request_timeout_seconds=1,
+        max_tool_rounds=3, agent_mode="demo",
+    )
+    app = create_app(settings, ecommerce_client=FakeEcommerce())
+    with TestClient(app) as client:
+        response = client.post(
+            "/chat/stream",
+            json={"message": "推荐手机", "session_id": "session-1", "access_token": "expired-jwt"},
+        )
+
+    assert response.status_code == 401
+    # 必须是普通 JSON 错误响应，不是 SSE 流
+    assert not response.headers["content-type"].startswith("text/event-stream")
+    assert "event: started" not in response.text
+    assert "detail" in response.json()
+
+
+def test_chat_stream_uses_authorization_header_before_legacy_body_token():
+    """Vue 统一使用 Authorization；请求头优先，body token 只保留旧前端兼容。"""
+    settings = Settings(
+        openai_api_key=None, openai_model="test-model", openai_base_url=None,
+        ecommerce_api_base_url="http://backend.test/api", request_timeout_seconds=1,
+        max_tool_rounds=3, agent_mode="demo",
+    )
+    app = create_app(settings, ecommerce_client=FakeEcommerce())
+
+    with TestClient(app) as client:
+        valid_header = client.post(
+            "/chat/stream",
+            headers={"Authorization": "Bearer test-jwt"},
+            json={
+                "message": "推荐手机",
+                "session_id": "session-header-valid",
+                "access_token": "expired-jwt",
+            },
+        )
+        invalid_header = client.post(
+            "/chat/stream",
+            headers={"Authorization": "Bearer expired-jwt"},
+            json={"message": "推荐手机", "session_id": "session-header-invalid"},
+        )
+
+    assert valid_header.status_code == 200
+    assert valid_header.headers["content-type"].startswith("text/event-stream")
+    assert "event: result" in valid_header.text
+
+    assert invalid_header.status_code == 401
+    assert not invalid_header.headers["content-type"].startswith("text/event-stream")
+    assert "event: started" not in invalid_header.text
+    assert invalid_header.json()["detail"] == "登录状态无效或已失效，请重新登录。"
 
 
 def test_index_serves_chat_interface():
@@ -348,11 +475,74 @@ def test_create_order_confirmation_executes_once():
                 "access_token": "owner-jwt",
             },
         )
+        duplicate = client.post(
+            "/chat",
+            json={
+                "message": "再买 1 个它",
+                "session_id": "session-order-create",
+                "access_token": "owner-jwt",
+            },
+        )
 
     assert executed.status_code == 200
     assert executed.json()["data"]["orderNo"] == "ORD-99"
-    assert ecommerce.created_orders[0]["addressId"] == 1
+    assert executed.json()["message"] == "订单创建成功，订单号：ORD-99。商品：「Smartphone X」× 1 件。"
+    assert ecommerce.created_orders[0]["addressId"] == 42
     assert ecommerce.created_orders[0]["paymentMethod"] == "DEMO"
+    assert "5分钟内已提交过相同的订单" in duplicate.json()["answer"]
+
+
+def test_rejected_create_order_does_not_trigger_duplicate_guard():
+    settings = Settings(
+        openai_api_key=None,
+        openai_model="test-model",
+        openai_base_url=None,
+        ecommerce_api_base_url="http://backend.test/api",
+        request_timeout_seconds=1,
+        max_tool_rounds=3,
+        agent_mode="demo",
+    )
+    app = create_app(settings, ecommerce_client=FakeEcommerce())
+
+    with TestClient(app) as client:
+        client.post(
+            "/chat",
+            json={
+                "message": "推荐手机",
+                "session_id": "session-order-rejected",
+                "access_token": "owner-jwt",
+            },
+        )
+        prepared = client.post(
+            "/chat",
+            json={
+                "message": "买 1 个它",
+                "session_id": "session-order-rejected",
+                "access_token": "owner-jwt",
+            },
+        )
+        rejected = client.post(
+            "/confirm",
+            json={
+                "session_id": "session-order-rejected",
+                "confirmation_token": prepared.json()["confirmation"]["token"],
+                "approved": False,
+                "access_token": "owner-jwt",
+            },
+        )
+        retried = client.post(
+            "/chat",
+            json={
+                "message": "买 1 个它",
+                "session_id": "session-order-rejected",
+                "access_token": "owner-jwt",
+            },
+        )
+
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "cancelled"
+    assert retried.status_code == 200
+    assert retried.json()["confirmation"]["action"] == "create_order"
 
 
 def test_pay_order_confirmation_executes_once():

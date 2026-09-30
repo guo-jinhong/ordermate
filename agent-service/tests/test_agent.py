@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
-from app.agent import AgentService
+from app.agent import AgentService, _customer_order_list_answer
 from app.tools.confirmation import ConfirmationStore, fingerprint_access_token
 from app.tools.registry import ToolRegistry
+
+
+def test_order_list_answer_only_mentions_supported_customer_actions():
+    answer = _customer_order_list_answer([{"orderNo": "ORD-8"}])
+
+    assert "共 1 笔" in answer
+    assert "查看订单详情" in answer
+    assert "取消" in answer
+    assert "退款" not in answer
+    assert "立即支付" not in answer
+    assert "完成支付" not in answer
 
 
 class FakeEcommerce:
@@ -39,6 +51,16 @@ class FakeEcommerce:
         self.cancelled.append(order_id)
         return {"id": order_id, "status": 4}
 
+    async def get_cart(self, access_token: str | None):
+        return [
+            {
+                "cartId": 88,
+                "productId": 104,
+                "productName": "OPPO Find X7",
+                "quantity": 1,
+            }
+        ]
+
 
 class FakeResponses:
     def __init__(self, responses):
@@ -48,6 +70,35 @@ class FakeResponses:
     async def create(self, **kwargs):
         self.requests.append(kwargs)
         return next(self._responses)
+
+
+@pytest.mark.asyncio
+async def test_llm_trace_is_isolated_between_concurrent_requests():
+    class ConcurrentResponses:
+        async def create(self, **kwargs):
+            message = kwargs["input"][-1]["content"]
+            await asyncio.sleep(0.02 if message == "first" else 0)
+            usage = SimpleNamespace(
+                input_tokens=11 if message == "first" else 22,
+                output_tokens=1,
+                total_tokens=12 if message == "first" else 23,
+            )
+            return SimpleNamespace(output=[], output_text=message, usage=usage)
+
+    service = AgentService(
+        SimpleNamespace(responses=ConcurrentResponses()),
+        FakeToolRegistry(),
+        model="test-model",
+    )
+
+    async def run(message: str) -> list[dict]:
+        await service.chat(message, session_id=message, access_token=None)
+        return service.collect_llm_trace()
+
+    first, second = await asyncio.gather(run("first"), run("second"))
+
+    assert first[0]["input"] == 11
+    assert second[0]["input"] == 22
 
 
 class FakeToolRegistry:
@@ -443,7 +494,7 @@ async def test_direct_add_to_cart_when_model_would_skip_tool_call():
         access_token="jwt",
     )
 
-    assert result.answer == "已把 小米 Redmi 13C x 1 加入购物车。"
+    assert result.answer == "已将「小米 Redmi 13C」加入购物车，共 1 件。"
     assert result.reference is not None
     assert result.reference.value == "126"
     assert result.tool_calls[0].arguments == {"product_id": 126, "quantity": 1}
@@ -492,7 +543,7 @@ async def test_natural_language_confirmation_executes_pending_cart_update():
 
     executed = []
 
-    async def executor(action, arguments, access_token):
+    async def executor(action, arguments, access_token, session_id):
         executed.append((action, dict(arguments), access_token))
         return {"ok": True}, f"购物车项 {arguments['cart_id']} 数量已修改为 {arguments['quantity']}。"
 
@@ -653,6 +704,24 @@ async def test_cancel_tool_only_creates_confirmation():
         "status": 0,
     }
     assert ecommerce.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_cart_confirmation_uses_product_name_instead_of_cart_id():
+    registry = ToolRegistry(FakeEcommerce(), ConfirmationStore())
+
+    result = await registry.execute(
+        "update_cart",
+        {"cart_id": 88, "quantity": 2},
+        session_id="session-friendly-cart",
+        access_token="jwt",
+    )
+
+    assert result.outcome == "confirmation_required"
+    assert result.confirmation is not None
+    assert result.confirmation.arguments["product_name"] == "OPPO Find X7"
+    assert "OPPO Find X7" in result.confirmation.description
+    assert "#88" not in result.confirmation.description
 
 
 @pytest.mark.asyncio
@@ -1044,7 +1113,7 @@ def test_clarification_labels_are_clean_utf8():
         ConversationState(),
     )
 
-    assert "商品 ID" in clarification
+    assert "商品名称或编号" in clarification
     assert "下单数量" in clarification
     assert "�" not in clarification
     assert "Ã" not in clarification

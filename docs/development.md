@@ -91,6 +91,9 @@ Copy-Item .env.example .env
 | 变量 | 默认值 | 敏感 | 说明 |
 | --- | --- | --- | --- |
 | `AGENT_MODE` | `auto` | 否 | `demo`、`live` 或 `auto` |
+| `EMBEDDING_API_KEY` | 空 | 否 | 独立 Embedding 服务凭据；不得默认复用聊天 Key |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | 否 | Embedding 服务实际支持的模型名 |
+| `EMBEDDING_BASE_URL` | 空 | 否 | 独立 Embedding 服务地址 |
 | `OPENAI_API_KEY` | 空 | 是 | live 模式模型 Key |
 | `OPENAI_MODEL` | `gpt-5.4-mini` | 否 | 模型服务支持的模型名 |
 | `OPENAI_BASE_URL` | 空 | 否 | OpenAI-compatible API 地址 |

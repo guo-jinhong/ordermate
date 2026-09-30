@@ -2,24 +2,42 @@
 -- 电商客服 Agent 知识库增强脚本
 -- 数据库: ecommerce_db
 -- 用途: 仅更新 knowledge 表，不修改商品、订单、购物车等业务数据
+--
+-- 分库说明（Phase 0）:
+--   doc_type = 'rule'    售后/退款/配送/平台规则，仅售后与政策场景检索
+--   doc_type = 'product' 商品特征 chunk，由 scripts/build_product_kb.py
+--                        从 products 表生成，本脚本只写入 rule 类知识
 -- ============================================================
 
 USE ecommerce_db;
 
 CREATE TABLE IF NOT EXISTS knowledge (
     id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '知识ID',
+    doc_type VARCHAR(32) NOT NULL DEFAULT 'rule' COMMENT '知识类型: rule=业务规则, product=商品特征',
     category VARCHAR(64) NOT NULL COMMENT '分类',
     title VARCHAR(200) NOT NULL COMMENT '知识标题',
     content TEXT NOT NULL COMMENT '知识内容',
     keywords VARCHAR(500) DEFAULT NULL COMMENT '关键词，用于搜索',
+    source_id BIGINT DEFAULT NULL COMMENT '来源ID，product 类型对应商品ID',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     INDEX idx_category (category),
+    INDEX idx_doc_type (doc_type),
+    INDEX idx_source_id (source_id),
     FULLTEXT INDEX ft_keywords (keywords, title)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识库表';
 
+-- 旧表补列（已存在则跳过报错，可忽略）
+ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS doc_type VARCHAR(32) NOT NULL DEFAULT 'rule' COMMENT '知识类型: rule=业务规则, product=商品特征';
+ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS source_id BIGINT DEFAULT NULL COMMENT '来源ID，product 类型对应商品ID';
+ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间';
+-- 历史数据统一标记为规则知识
+UPDATE knowledge SET doc_type = 'rule' WHERE doc_type IS NULL OR doc_type = '';
+
 START TRANSACTION;
 
-DELETE FROM knowledge;
+-- 只重置规则知识，保留 scripts/build_product_kb.py 生成的商品特征 chunk
+DELETE FROM knowledge WHERE doc_type = 'rule';
 ALTER TABLE knowledge AUTO_INCREMENT = 1;
 
 INSERT INTO knowledge (category, title, content, keywords) VALUES
