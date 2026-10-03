@@ -19,9 +19,9 @@ export function finiteAmount(value: unknown): number | null {
 }
 
 export function finitePositiveInteger(value: unknown): number | null {
-  if (value == null || value === '') return null
+  if ((typeof value !== 'number' && typeof value !== 'string') || value === '') return null
   const number = Number(value)
-  return Number.isInteger(number) && number > 0 ? number : null
+  return Number.isSafeInteger(number) && number > 0 ? number : null
 }
 
 export function formatCurrency(value: unknown, fallback = '价格待确认'): string {

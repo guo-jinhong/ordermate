@@ -7,6 +7,60 @@ from app.config import Settings
 from app.main import create_app
 
 
+def test_button_confirmation_and_text_confirmation_share_single_use_state():
+    from types import SimpleNamespace
+
+    class CartBusiness(FakeEcommerce):
+        def __init__(self):
+            super().__init__()
+            self.batch_writes = []
+        async def get_cart(self, access_token):
+            return [{'cartId': 71, 'productId': 8, 'productName': '框架指南', 'quantity': 3}]
+        async def clear_cart(self, access_token):
+            self.batch_writes.append("clear")
+
+    async def create(**kwargs):
+        return SimpleNamespace(output=[], output_text='当前没有待确认的操作。')
+
+    for approved in [False, True]:
+        business = CartBusiness()
+        settings = Settings(agent_mode='live', openai_api_key='test', openai_model='test', openai_base_url=None, request_timeout_seconds=1, max_tool_rounds=3, ecommerce_api_base_url='http://backend.test/api')
+        app = create_app(settings, ecommerce_client=business, model_client=SimpleNamespace(responses=SimpleNamespace(create=create)))
+        with TestClient(app) as client:
+            body = {'session_id': 'shared-token', 'access_token': 'owner-jwt'}
+            prepared = client.post('/chat', json={**body, 'message': '清空购物车'})
+            assert prepared.status_code == 200
+            token = prepared.json()['confirmation']['token']
+            confirmed = client.post('/confirm', json={**body, 'confirmation_token': token, 'approved': approved})
+            assert confirmed.status_code == 200
+            before = len(business.batch_writes)
+            repeated = client.post('/chat', json={**body, 'message': '确认'})
+            assert repeated.status_code == 200
+            assert len(business.batch_writes) == before == int(approved)
+            assert repeated.json()['confirmation'] is None
+
+
+def test_text_confirmation_uses_same_approval_and_token_as_button():
+    from types import SimpleNamespace
+
+    async def create(**kwargs):
+        return SimpleNamespace(output=[], output_text='当前没有待确认的操作。')
+    business = FakeEcommerce()
+    settings = Settings(agent_mode='live', openai_api_key='test', openai_model='test', openai_base_url=None, request_timeout_seconds=1, max_tool_rounds=3, ecommerce_api_base_url='http://backend.test/api')
+    app = create_app(settings, ecommerce_client=business, model_client=SimpleNamespace(responses=SimpleNamespace(create=create)))
+    with TestClient(app) as client:
+        body = {'session_id': 'text-token', 'access_token': 'owner-jwt'}
+        prepared = client.post('/chat', json={**body, 'message': '取消订单 8'})
+        token = prepared.json()['confirmation']['token']
+        confirmed = client.post('/chat', json={**body, 'message': '确认'})
+        assert confirmed.status_code == 200
+        assert business.cancelled == [8]
+        replay = client.post('/confirm', json={**body, 'confirmation_token': token, 'approved': True})
+        assert replay.status_code == 200
+        assert replay.json()["status"] == "executed"
+        assert business.cancelled == [8]
+
+
 class FakeEcommerce:
     def __init__(self):
         self.cancelled: list[int] = []
@@ -68,6 +122,7 @@ class FakeEcommerce:
         address_id: int,
         payment_method: str,
         access_token: str | None,
+        idempotency_key: str | None = None,
     ):
         order = {
             "id": 99,
@@ -123,10 +178,12 @@ def test_health_works_without_api_key():
         "serving_mode": "live",
         "embedding_mode": "lexical",
         "backend_base_url": "http://backend.test/api",
+        "public_demo": False,
+        "chat_login_required": False,
     }
 
 
-def test_auto_mode_falls_back_to_demo_when_live_model_is_unavailable():
+def test_auto_mode_does_not_replay_business_flow_when_live_model_fails():
     from types import SimpleNamespace
 
     class FailingResponses:
@@ -155,11 +212,10 @@ def test_auto_mode_falls_back_to_demo_when_live_model_is_unavailable():
         )
         health = client.get("/health?deep=true")
 
-    assert response.status_code == 200
-    assert "Smartphone X" in response.json()["answer"]
-    assert health.json()["status"] == "degraded"
-    assert health.json()["serving_mode"] == "demo_fallback"
-    assert health.json()["fallback_reason"] == "ConnectionError"
+    assert response.status_code == 500
+    assert health.json()["status"] == "ok"
+    assert health.json()["serving_mode"] == "live"
+    assert health.json().get("fallback_reason") is None
 
 
 def test_auth_session_validates_stored_token_and_returns_username():
@@ -431,7 +487,8 @@ def test_confirmation_is_bound_to_login_and_single_use():
     assert wrong_login.status_code == 404
     assert executed.status_code == 200
     assert executed.json()["data"]["status"] == 4
-    assert repeated.status_code == 404
+    assert repeated.status_code == 200
+    assert repeated.json() == executed.json()
     assert ecommerce.cancelled == [8]
 
 
@@ -486,10 +543,13 @@ def test_create_order_confirmation_executes_once():
 
     assert executed.status_code == 200
     assert executed.json()["data"]["orderNo"] == "ORD-99"
-    assert executed.json()["message"] == "订单创建成功，订单号：ORD-99。商品：「Smartphone X」× 1 件。"
+    assert executed.json()["message"] == "下单成功，订单号：ORD-99。商品：「Smartphone X」× 1 件。"
     assert ecommerce.created_orders[0]["addressId"] == 42
     assert ecommerce.created_orders[0]["paymentMethod"] == "DEMO"
-    assert "5分钟内已提交过相同的订单" in duplicate.json()["answer"]
+    # 明确“再买”是新意图，只准备新确认，不直接再执行。
+    assert duplicate.json()["confirmation"] is not None
+    assert duplicate.json()["confirmation"]["token"] != confirmation_token
+    assert len(ecommerce.created_orders) == 1
 
 
 def test_rejected_create_order_does_not_trigger_duplicate_guard():

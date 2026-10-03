@@ -34,6 +34,7 @@ def conversation_identity(access_token: str | None) -> str:
 class ConversationMessage:
     role: str
     content: str
+    verified_actions: tuple[str, ...] = ()
 
     def as_model_input(self) -> dict[str, str]:
         return {"role": self.role, "content": self.content}
@@ -139,6 +140,20 @@ class ConversationMemoryStore:
         for key in expired:
             del self._items[key]
 
+    async def record_operations(self, session_id: str, access_token: str | None, actions: list[str]) -> None:
+        if not actions:
+            return
+        key = self._key(session_id, access_token)
+        async with self._lock:
+            self._purge_expired_locked()
+            conversation = self._items.get(key)
+            if conversation is None:
+                conversation = _Conversation(messages=[], expires_at=0)
+                self._items[key] = conversation
+            if conversation is not None:
+                conversation.expires_at = self._clock() + self._ttl_seconds
+                conversation.messages.append(ConversationMessage("assistant", "已核实操作：" + "、".join(actions), tuple(actions)))
+
     async def summarize_and_compress(
         self, session_id: str, access_token: str | None
     ) -> tuple[str, int] | None:
@@ -159,6 +174,7 @@ class ConversationMemoryStore:
             summary_msg = ConversationMessage(
                 "assistant",
                 f"[历史摘要] {summary}",
+                tuple(sorted({a for m in older for a in m.verified_actions})),
             )
             compressed_count = len(older)
             conversation.messages = [summary_msg] + recent
@@ -181,16 +197,10 @@ class ConversationMemoryStore:
         price_match = re.findall(r"(?:预算|不超过|价格|¥|price)[^0-9]{0,10}(\d+(?:\.\d+)?)", text)
         budget = price_match[0] if price_match else None
 
-        ops: list[str] = []
-        if re.search(r"取消|cancel", text, re.IGNORECASE):
-            ops.append("cancelled_order")
-        if re.search(r"支付|付款|pay", text, re.IGNORECASE):
-            ops.append("paid_order")
-        if re.search(r"加入购物车|加购物车|add.?to.?cart", text, re.IGNORECASE):
-            ops.append("added_to_cart")
-        if re.search(r"下单|创建订单|create.?order", text, re.IGNORECASE):
-            ops.append("created_order")
-
+        ops = sorted({action for message in messages for action in (
+            message.verified_actions if isinstance(message, ConversationMessage)
+            else message.get("verified_actions", [])
+        )})
         parts: list[str] = []
         if product_ids:
             parts.append(f"涉及商品: {','.join(product_ids)}")

@@ -6,7 +6,7 @@ import type { PromptAction } from '../../types/chat'
 import type { OrderRecord } from '../../types/results'
 import OrderItemRow from './OrderItemRow.vue'
 
-const props = defineProps<{ order: OrderRecord }>()
+const props = withDefaults(defineProps<{ order: OrderRecord; busy?: boolean }>(), { busy: false })
 const emit = defineEmits<{ prompt: [action: PromptAction] }>()
 
 const orderStatus = computed(() => {
@@ -22,7 +22,7 @@ const orderStatus = computed(() => {
   }
   return {
     code: Number.isInteger(value) && value >= 0 && value <= 4 ? value : null,
-    label: labels[value] ?? '未知状态',
+    label: labels[value] ?? '订单状态暂时无法获取，请稍后刷新',
   }
 })
 const paymentStatus = computed(() => {
@@ -31,7 +31,9 @@ const paymentStatus = computed(() => {
     : Number(props.order.paymentStatus)
   if (value === 0) return '未支付'
   if (value === 1) return '已支付'
-  return '支付状态未知'
+  if (value === 2) return '退款处理中'
+  if (value === 3) return '已退款'
+  return '支付状态暂时无法获取'
 })
 const amountLabel = computed(() => paymentStatus.value === '已支付' ? '实付金额' : '订单金额')
 const totalAmount = computed(() => finiteAmount(props.order.totalAmount))
@@ -64,7 +66,7 @@ const orderLabel = computed(() => props.order.orderNo?.trim() || '当前订单')
     <footer>
       <button
         type="button"
-        :disabled="order.id == null"
+        :disabled="busy || order.id == null"
         @click="emit('prompt', {
           prompt: `查看订单 ${order.id} 的详情`,
           displayPrompt: `查看订单 ${orderLabel} 的详情`,
@@ -78,6 +80,7 @@ const orderLabel = computed(() => props.order.orderNo?.trim() || '当前订单')
         v-if="orderStatus.code === 0 && order.id != null"
         class="danger"
         type="button"
+        :disabled="busy"
         @click="emit('prompt', {
           prompt: `取消订单 ${order.id}`,
           displayPrompt: `取消订单 ${orderLabel}`,
@@ -93,10 +96,11 @@ const orderLabel = computed(() => props.order.orderNo?.trim() || '当前订单')
 
 <style scoped>
 .order-card { display: grid; gap: var(--space-3); padding: var(--space-4); background: var(--color-surface); border: 1px solid var(--color-line); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }
-header, .meta, footer, .amounts div { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }header > div { display: grid; gap: var(--space-1); }header > div span, .meta, .items > p, .amounts dt { color: var(--color-muted); font-size: var(--text-sm); }header strong { color: var(--color-navy); }
-.status { padding: var(--space-1) var(--space-2); color: var(--color-muted); background: var(--color-surface-subtle); border-radius: var(--radius-pill); font-size: var(--text-xs); font-weight: 800; }.status[data-status="0"] { color: var(--color-warning); background: var(--color-warning-soft); }.status[data-status="1"], .status[data-status="2"], .status[data-status="3"] { color: var(--color-success); background: var(--color-success-soft); }.status[data-status="4"] { color: var(--color-danger); background: var(--color-danger-soft); }
-.items { padding: var(--space-2) var(--space-3); background: var(--color-surface-subtle); border-radius: var(--radius-md); }.items > p { padding-block: var(--space-2); }
+header, .meta, footer, .amounts div { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }header > div { display: grid; gap: var(--space-1); }header > div span, .meta, .items > p, .amounts dt { color: var(--color-muted); font-size: var(--text-sm); }header strong { color: var(--color-navy); overflow-wrap: anywhere; }
+.status { padding: var(--space-1) var(--space-2); color: var(--color-muted); background: var(--color-surface); border-radius: var(--radius-pill); font-size: var(--text-xs); font-weight: 800; }.status[data-status="0"] { color: var(--color-warning-hover); background: var(--color-warning-soft); }.status[data-status="1"], .status[data-status="2"], .status[data-status="3"] { color: var(--color-success-hover); background: var(--color-success-soft); }.status[data-status="4"] { color: var(--color-danger); background: var(--color-danger-soft); }
+.items { padding: var(--space-3) 0; border-top: 1px solid var(--color-line); border-bottom: 1px solid var(--color-line); }.items > p { padding-block: var(--space-2); }
 .amounts { display: grid; gap: var(--space-2); margin: 0; }.amounts dd { margin: 0; font-weight: 700; }.amounts .final { padding-top: var(--space-2); border-top: 1px solid var(--color-line); }.amounts .final dd { color: var(--color-primary-ink); font-size: var(--text-lg); }
-footer { justify-content: flex-end; }button { min-height: var(--control-height-md); padding-inline: var(--space-4); color: var(--color-primary-ink); background: var(--color-surface); border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); font-weight: 700; }.danger { color: var(--color-danger); border-color: var(--color-danger); }button:disabled { opacity: 0.5; }
+footer { justify-content: flex-end; padding-top: var(--space-3); border-top: 1px solid var(--color-line); }button { min-height: var(--control-height-md); padding-inline: var(--space-4); color: var(--color-primary-ink); background: var(--color-surface); border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); font-weight: 700; }.danger { color: var(--color-danger); border-color: var(--color-danger); }button:disabled { opacity: 0.5; }
 @media (max-width: 680px) { header, .meta { align-items: flex-start; flex-direction: column; }footer button { flex: 1; } }
+button:disabled { cursor: not-allowed; opacity: 0.5; }
 </style>

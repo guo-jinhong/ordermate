@@ -62,3 +62,17 @@ bin/
 # Environment
 .env
 .env.local
+
+# Local launcher logs
+.runtime/
+
+# SQLite sidecars and local environment variants
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+.env.*
+!.env.example
+!.env.docker.example

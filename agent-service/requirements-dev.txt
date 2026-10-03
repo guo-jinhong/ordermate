@@ -4,3 +4,6 @@ pytest-asyncio>=0.24,<2
 slowapi>=0.1.9,<1
 prometheus-client>=0.20,<1
 numpy>=1.26,<2
+
+# Redis Lua 原子操作回归测试（仅开发依赖）
+fakeredis[lua]>=2.23,<3

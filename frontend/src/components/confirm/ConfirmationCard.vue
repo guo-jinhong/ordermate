@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, useId } from 'vue'
+import { CircleAlert, PackageCheck, TriangleAlert } from '@lucide/vue'
+import { computed, onMounted, onUnmounted, ref, useId } from 'vue'
 import { customerCopy } from '../../lib/catalogCopy'
 
 import { confirmationPresentation } from '../../lib/labels'
@@ -12,11 +13,32 @@ const props = defineProps<{
   confirmation: Confirmation
   phase: ConfirmationPhase
   result: AssistantMessage['confirmationResult']
+  busy?: boolean
 }>()
-const emit = defineEmits<{ confirm: [approved: boolean] }>()
+const emit = defineEmits<{ confirm: [approved: boolean]; verify: [] }>()
 const titleId = useId()
 const presentation = computed(() => confirmationPresentation(props.confirmation.action))
-const terminal = computed(() => ['executed', 'cancelled', 'failed'].includes(props.phase))
+const terminal = computed(() => ['executed', 'cancelled', 'failed', 'unknown'].includes(props.phase))
+const now = ref(Date.now())
+const expiresAt = computed(() => props.confirmation.expires_at ? Date.parse(props.confirmation.expires_at) : NaN)
+const expired = computed(() => Number.isFinite(expiresAt.value) && now.value >= expiresAt.value)
+const remaining = computed(() => Math.max(0, Math.ceil((expiresAt.value - now.value) / 1000)))
+const syncTime = () => { now.value = Date.now() }
+let timer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  timer = setInterval(syncTime, 1000)
+  document.addEventListener('visibilitychange', syncTime)
+  window.addEventListener('focus', syncTime)
+})
+onUnmounted(() => {
+  if (timer != null) clearInterval(timer)
+  document.removeEventListener('visibilitychange', syncTime)
+  window.removeEventListener('focus', syncTime)
+})
+function submit(approved: boolean) {
+  syncTime()
+  if (!expired.value && !props.busy && props.phase === 'pending') emit('confirm', approved)
+}
 </script>
 
 <template>
@@ -28,7 +50,11 @@ const terminal = computed(() => ['executed', 'cancelled', 'failed'].includes(pro
     :aria-labelledby="titleId"
   >
     <header>
-      <span class="icon" aria-hidden="true">{{ presentation.icon }}</span>
+      <span class="icon" aria-hidden="true">
+        <TriangleAlert v-if="presentation.tone === 'danger'" :size="19" />
+        <PackageCheck v-else-if="presentation.tone === 'primary'" :size="19" />
+        <CircleAlert v-else :size="19" />
+      </span>
       <div>
         <span class="badge">{{ presentation.badge }}</span>
         <h3 :id="titleId">{{ presentation.title }}</h3>
@@ -36,27 +62,34 @@ const terminal = computed(() => ['executed', 'cancelled', 'failed'].includes(pro
     </header>
     <p class="description">{{ customerCopy(confirmation.description) }}</p>
     <ConfirmFacts :action="confirmation.action" :args="confirmation.arguments" />
-    <p class="impact"><strong>操作影响：</strong>{{ presentation.impact }}</p>
+    <p class="impact"><strong>确认后：</strong>{{ presentation.impact }}</p>
+    <p v-if="phase === 'pending' && Number.isFinite(expiresAt)" role="status">
+      {{ expired ? '本次确认已过期，请重新发起操作。' : `此确认将在 ${remaining} 秒后失效，未确认不会自动操作。` }}
+    </p>
 
     <OperationResult
       v-if="terminal"
+      :action="confirmation.action"
       :phase="phase"
       :message="result?.message ? customerCopy(result.message) : null"
       :data="result?.data ?? null"
     />
-    <footer v-else>
+    <footer v-if="phase === 'unknown'">
+      <button type="button" :disabled="busy" @click="emit('verify')">{{ busy ? '正在处理…' : '核实操作结果' }}</button>
+    </footer>
+    <footer v-else-if="!terminal">
       <button
         type="button"
-        :disabled="phase === 'submitting'"
-        @click="emit('confirm', false)"
+        :disabled="busy || phase === 'submitting' || expired"
+        @click="submit(false)"
       >
-        暂不执行
+        先不操作
       </button>
       <button
         class="confirm"
         type="button"
-        :disabled="phase === 'submitting'"
-        @click="emit('confirm', true)"
+        :disabled="busy || phase === 'submitting' || expired"
+        @click="submit(true)"
       >
         {{ phase === 'submitting' ? '正在提交…' : presentation.confirmLabel }}
       </button>

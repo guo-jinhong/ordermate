@@ -34,11 +34,11 @@ export function useChatAnnouncements(announce: Announce): void {
     const confirmationChanged = current.confirmationToken != null
       && current.confirmationPhase !== previous?.confirmationPhase
     if (confirmationChanged && current.confirmationPhase === 'executed') {
-      void announce(`操作已完成：${current.confirmationMessage ?? '数据已更新。'}`)
+      void announce(`操作已完成：${current.confirmationMessage ?? '已为您完成这次操作。'}`)
       return
     }
     if (confirmationChanged && current.confirmationPhase === 'cancelled') {
-      void announce(`操作已取消：${current.confirmationMessage ?? '数据没有被修改。'}`)
+      void announce(`本次未操作：${current.confirmationMessage ?? '购物车和订单保持不变。'}`)
       return
     }
     if (confirmationChanged && current.confirmationPhase === 'failed') {

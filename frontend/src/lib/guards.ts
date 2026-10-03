@@ -74,7 +74,7 @@ export function isProductRecord(item: unknown): item is ProductRecord {
 
 function productContext(toolCalls: ToolCallRecord[]): ProductSearchContext {
   const call = [...toolCalls].reverse().find(({ name }) => PRODUCT_TOOLS.has(name))
-  return call == null ? {} : { ...call.arguments }
+  return call == null ? {} : { ...call.arguments, ...(call.name === 'get_product_detail' ? { detail: true } : {}) }
 }
 
 function payloadForKnownKind(

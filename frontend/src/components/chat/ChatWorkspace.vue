@@ -14,10 +14,12 @@ const view = useViewStore()
 const handlePrompt = async (action: PromptAction): Promise<void> => {
   if (action.authRequired && !session.isAuthenticated) {
     session.requestLoginForAction(action.prompt, action.label, action.displayPrompt)
-    view.openSidebar()
+    view.openAccount()
     return
   }
-  if (action.displayPrompt) {
+  if (action.preserveScroll) {
+    await chat.send(action.prompt, action.displayPrompt, { preserveScroll: true })
+  } else if (action.displayPrompt) {
     await chat.send(action.prompt, action.displayPrompt)
   } else {
     await chat.send(action.prompt)
@@ -26,10 +28,12 @@ const handlePrompt = async (action: PromptAction): Promise<void> => {
 </script>
 
 <template>
-  <main id="workspace" class="workspace" tabindex="-1">
+  <main id="workspace" class="workspace" :data-conversation="chat.hasConversation" tabindex="-1">
     <WelcomeState
       v-if="!chat.hasConversation"
       :authenticated="session.isAuthenticated"
+      :login-required="session.chatLoginRequired"
+      :busy="!chat.canSend"
       @prompt="handlePrompt"
     />
     <MessageList v-else @prompt="handlePrompt" @confirm="chat.confirm" />

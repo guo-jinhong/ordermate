@@ -6,6 +6,7 @@ export const useViewStore = defineStore('view', {
   state: () => ({
     viewMode: 'customer' as ViewMode,
     sidebarOpen: false,
+    loginPanelOpen: false,
   }),
 
   getters: {
@@ -13,6 +14,10 @@ export const useViewStore = defineStore('view', {
   },
 
   actions: {
+    openAccount(): void {
+      this.loginPanelOpen = true
+      this.openSidebar()
+    },
     setViewMode(mode: ViewMode): void {
       this.viewMode = mode
       if (mode === 'developer') this.sidebarOpen = false

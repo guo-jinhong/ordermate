@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from dataclasses import asdict, fields
 from hashlib import sha256
 from typing import Any
 
@@ -28,7 +29,7 @@ class RedisConversationMemoryStore:
         if raw is None:
             return []
         await self._client.expire(key, self._ttl_seconds)
-        return json.loads(raw)
+        return [{"role": m["role"], "content": m["content"]} for m in json.loads(raw)]
 
     async def append_turn(
         self,
@@ -38,22 +39,28 @@ class RedisConversationMemoryStore:
         assistant_message: str,
     ) -> None:
         key = self._key(session_id, access_token)
-        messages = await self.get(session_id, access_token)
-        messages.extend(
-            [
-                ConversationMessage("user", redact_sensitive_text(user_message)).as_model_input(),
-                ConversationMessage("assistant", redact_sensitive_text(assistant_message)).as_model_input(),
-            ]
-        )
-        has_summary = bool(messages and messages[0].get("content", "").startswith("[历史摘要]"))
-        if len(messages) > self._max_messages:
-            if has_summary:
-                excess = len(messages) - self._max_messages
-                keep_from = max(1, excess + 1)
-                messages = [messages[0]] + messages[keep_from:]
-            else:
-                messages = messages[-self._max_messages:]
-        await self._client.set(key, json.dumps(messages, ensure_ascii=False), ex=self._ttl_seconds)
+        await self._append(key, [
+            ConversationMessage("user", redact_sensitive_text(user_message)).as_model_input(),
+            ConversationMessage("assistant", redact_sensitive_text(assistant_message)).as_model_input(),
+        ])
+
+    async def _append(self, key, additions):
+        # Lua 内完成读取、追加和截断，避免进程间覆盖历史。
+        await self._client.eval("""
+local messages=cjson.decode(redis.call('get',KEYS[1]) or '[]')
+local additions=cjson.decode(ARGV[1])
+for _,m in ipairs(additions) do table.insert(messages,m) end
+local max=tonumber(ARGV[2])
+while #messages>max do
+  if string.sub(messages[1].content,1,string.len('[历史摘要]'))=='[历史摘要]' then table.remove(messages,2)
+  else table.remove(messages,1) end
+end
+redis.call('set',KEYS[1],cjson.encode(messages),'EX',ARGV[3]); return #messages
+""", 1, key, json.dumps(additions, ensure_ascii=False), self._max_messages, self._ttl_seconds)
+
+    async def record_operations(self, session_id, access_token, actions):
+        if actions:
+            await self._append(self._key(session_id, access_token), [{"role": "assistant", "content": "已核实操作：" + "、".join(actions), "verified_actions": actions}])
 
     async def summarize_and_compress(
         self, session_id: str, access_token: str | None
@@ -74,11 +81,11 @@ class RedisConversationMemoryStore:
             return None
 
         summary = self._generate_rule_based_summary(older)
-        summary_msg = {"role": "assistant", "content": f"[历史摘要] {summary}"}
+        summary_msg = {"role": "assistant", "content": f"[历史摘要] {summary}", "verified_actions": sorted({a for m in older for a in m.get("verified_actions", [])})}
         compressed_count = len(older)
         new_messages = [summary_msg] + recent
-        await self._client.set(key, json.dumps(new_messages, ensure_ascii=False), ex=self._ttl_seconds)
-        return summary, compressed_count
+        changed = await self._client.eval("if redis.call('get',KEYS[1])==ARGV[1] then redis.call('set',KEYS[1],ARGV[2],'EX',ARGV[3]); return 1 end return 0", 1, key, raw, json.dumps(new_messages, ensure_ascii=False), self._ttl_seconds)
+        return (summary, compressed_count) if changed else None
 
     @staticmethod
     def _generate_rule_based_summary(messages: list[dict[str, str]]) -> str:
@@ -92,15 +99,10 @@ class RedisConversationMemoryStore:
         order_ids = list(set(order_ids))
         price_match = re.findall(r"(?:预算|不超过|价格|¥|price)[^0-9]{0,10}(\d+(?:\.\d+)?)", text)
         budget = price_match[0] if price_match else None
-        ops: list[str] = []
-        if re.search(r"取消|cancel", text, re.IGNORECASE):
-            ops.append("cancelled_order")
-        if re.search(r"支付|付款|pay", text, re.IGNORECASE):
-            ops.append("paid_order")
-        if re.search(r"加入购物车|加购物车|add.?to.?cart", text, re.IGNORECASE):
-            ops.append("added_to_cart")
-        if re.search(r"下单|创建订单|create.?order", text, re.IGNORECASE):
-            ops.append("created_order")
+        ops = sorted({action for message in messages for action in (
+            message.verified_actions if isinstance(message, ConversationMessage)
+            else message.get("verified_actions", [])
+        )})
         parts: list[str] = []
         if product_ids:
             parts.append(f"涉及商品: {','.join(product_ids)}")
@@ -133,7 +135,7 @@ class RedisConversationMemoryStore:
 class RedisConfirmationStore:
     """Single-use confirmation tokens backed by Redis so restarts do not lose them."""
 
-    def __init__(self, client: Any, ttl_seconds: int = 60) -> None:
+    def __init__(self, client: Any, ttl_seconds: int = 180) -> None:
         self._client = client
         self._ttl_seconds = ttl_seconds
 
@@ -244,38 +246,22 @@ class RedisConversationStateStore:
     @staticmethod
     def _deserialize_state(raw: str) -> ConversationState:
         data = json.loads(raw)
-        state = ConversationState()
-        state.last_order_id = data.get("last_order_id")
-        state.last_order_no = data.get("last_order_no")
-        state.last_product_keyword = data.get("last_product_keyword")
-        state.last_product_id = data.get("last_product_id")
-        state.last_product_name = data.get("last_product_name")
-        state.shown_product_ids = data.get("shown_product_ids", [])
-        state.last_cart_viewed = data.get("last_cart_viewed", False)
-        state.last_knowledge_topic = data.get("last_knowledge_topic")
-        state.turn_count = data.get("turn_count", 0)
-        state.last_topic = data.get("last_topic")
+        allowed = {field.name for field in fields(ConversationState)} - {"updated_at"}
+        state = ConversationState(**{name: value for name, value in data.items() if name in allowed})
         return state
 
     async def save(
         self, session_id: str, access_token: str | None, state: ConversationState
     ) -> None:
         key = self._key(session_id, access_token)
-        data = {
-            "last_order_id": state.last_order_id,
-            "last_order_no": state.last_order_no,
-            "last_product_keyword": state.last_product_keyword,
-            "last_product_id": state.last_product_id,
-            "last_product_name": state.last_product_name,
-            "shown_product_ids": state.shown_product_ids,
-            "last_cart_viewed": state.last_cart_viewed,
-            "last_knowledge_topic": state.last_knowledge_topic,
-            "turn_count": state.turn_count,
-            "last_topic": state.last_topic,
-        }
+        data = asdict(state)
+        data.pop("updated_at", None)  # Redis TTL 负责跨进程过期，避免持久化单进程单调时钟。
         await self._client.set(
             key, json.dumps(data, ensure_ascii=False), ex=self._ttl_seconds
         )
+
+    async def clear(self, session_id: str, access_token: str | None) -> bool:
+        return bool(await self._client.delete(self._key(session_id, access_token)))
 
     async def clear_session(self, session_id: str) -> int:
         pattern = f"agent:state:{self._session_hash(session_id)}:*"

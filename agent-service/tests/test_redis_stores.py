@@ -14,8 +14,11 @@ class FakeRedis:
     async def get(self, key: str):
         return self.values.get(key)
 
-    async def set(self, key: str, value: str, *, ex: int):
+    async def set(self, key: str, value: str, *, ex=None, nx=False):
+        if nx and key in self.values:
+            return False
         self.values[key] = value
+        return True
 
     async def expire(self, key: str, seconds: int):
         return key in self.values
@@ -32,9 +35,18 @@ class FakeRedis:
             if key.startswith(prefix):
                 yield key
 
-    async def eval(self, script: str, numkeys: int, key: str, raw: str):
-        if self.values.get(key) != raw:
+    async def eval(self, script: str, numkeys: int, key: str, *args):
+        if "table.insert" in script:
+            messages = json.loads(self.values.get(key, "[]")) + json.loads(args[0])
+            while len(messages) > args[1]:
+                messages.pop(1 if messages[0]["content"].startswith("[历史摘要]") else 0)
+            self.values[key] = json.dumps(messages, ensure_ascii=False)
+            return len(messages)
+        if self.values.get(key) != args[0]:
             return 0
+        if "redis.call('set'" in script:
+            self.values[key] = args[1]
+            return 1
         return await self.delete(key)
 
 

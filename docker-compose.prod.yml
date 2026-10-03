@@ -19,7 +19,7 @@ services:
       REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
       CORS_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}
       ADMIN_TOKEN: ${ADMIN_TOKEN:?ADMIN_TOKEN is required}
-      PUBLIC_READONLY: ${PUBLIC_READONLY:-true}
+      PUBLIC_READONLY: ${PUBLIC_READONLY:-false}
     ports: !reset []
 
   frontend:

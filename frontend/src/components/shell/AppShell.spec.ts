@@ -75,7 +75,7 @@ describe('AppShell focus management', () => {
     ;(close.element as HTMLElement).focus()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true }))
 
-    expect(document.activeElement).toBe(wrapper.get('.new-chat').element)
+    expect(document.activeElement).toBe(wrapper.get('.account-entry').element)
     wrapper.unmount()
   })
 
@@ -110,9 +110,9 @@ describe('AppShell focus management', () => {
 
     const pendingMessage = chat.messages[1] as AssistantMessage
     pendingMessage.confirmationPhase = 'cancelled'
-    pendingMessage.confirmationResult = { message: '数据没有被修改。', data: null }
+    pendingMessage.confirmationResult = { message: '购物车和订单保持不变。', data: null }
     await flushPromises()
-    expect(wrapper.get('[role="status"].sr-only').text()).toBe('操作已取消：数据没有被修改。')
+    expect(wrapper.get('[role="status"].sr-only').text()).toBe('本次未操作：购物车和订单保持不变。')
     wrapper.unmount()
   })
 })

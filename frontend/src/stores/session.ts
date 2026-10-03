@@ -26,6 +26,7 @@ export const useSessionStore = defineStore('session', {
       username: stored.username,
       sessionId: ensureSessionId(),
       authStatus: (stored.accessToken ? 'checking' : 'anonymous') as AuthStatus,
+      chatLoginRequired: false,
       pendingAction: null as PendingAction | null,
     }
   },

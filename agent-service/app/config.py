@@ -44,6 +44,11 @@ class Settings:
     openai_fallback_model: str | None = None
     openai_fallback_base_url: str | None = None
     openai_fallback_api_key: str | None = None
+    chat_timeout_seconds: float = 60
+    read_retry_budget_seconds: float = 20
+    confirmation_ttl_seconds: int = 180
+    operation_retention_days: int = 7
+    operation_db_path: str = "agent_operations.db"
     agent_mode: str = "auto"
     conversation_max_messages: int = 30
     conversation_ttl_seconds: int = 900
@@ -66,6 +71,11 @@ class Settings:
     admin_token: str | None = None
     # 公网安全：共享账号下禁用写操作（购物车/下单/支付/取消/退款）
     public_readonly: bool = False
+    # 本机临时公网演示入口；仅提供 Vue 页面和所需 API。
+    public_demo: bool = False
+    demo_chat_daily_limit: int = 30
+    demo_chat_max_concurrent: int = 2
+    demo_allowed_users: list[str] = field(default_factory=list)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -84,6 +94,11 @@ class Settings:
                 "ECOMMERCE_API_BASE_URL", "http://localhost:8080/api"
             ).rstrip("/"),
             request_timeout_seconds=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15")),
+            chat_timeout_seconds=float(os.getenv("CHAT_TIMEOUT_SECONDS", "60")),
+            read_retry_budget_seconds=float(os.getenv("READ_RETRY_BUDGET_SECONDS", "20")),
+            confirmation_ttl_seconds=max(1, int(os.getenv("CONFIRMATION_TTL_SECONDS", "180"))),
+            operation_retention_days=max(1, int(os.getenv("OPERATION_RETENTION_DAYS", "7"))),
+            operation_db_path=os.getenv("OPERATION_DB_PATH", "agent_operations.db"),
             max_tool_rounds=int(os.getenv("MAX_TOOL_ROUNDS", "5")),
             agent_mode=os.getenv("AGENT_MODE", "auto").lower(),
             conversation_max_messages=int(os.getenv("CONVERSATION_MAX_MESSAGES", "12")),
@@ -100,6 +115,10 @@ class Settings:
             cors_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()],
             admin_token=os.getenv("ADMIN_TOKEN") or None,
             public_readonly=os.getenv("PUBLIC_READONLY", "false").lower() in {"1", "true", "yes", "on"},
+            public_demo=os.getenv("PUBLIC_DEMO", "false").lower() in {"1", "true", "yes", "on"},
+            demo_chat_daily_limit=int(os.getenv("DEMO_CHAT_DAILY_LIMIT", "30")),
+            demo_chat_max_concurrent=int(os.getenv("DEMO_CHAT_MAX_CONCURRENT", "2")),
+            demo_allowed_users=[u.strip() for u in os.getenv("DEMO_ALLOWED_USERS", "").split(",") if u.strip()],
         )
 
     def resolved_agent_mode(self) -> str:

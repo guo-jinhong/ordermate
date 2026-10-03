@@ -5,11 +5,17 @@ import type { ConfirmationAction } from '../../types/api'
 import ConfirmFacts from './ConfirmFacts.vue'
 
 describe('ConfirmFacts', () => {
+  it('shows the address selected for this order', () => {
+    const wrapper = mount(ConfirmFacts, { props: { action: 'create_order', args: {
+      address_id: 42, address_summary: '乙 广东省 深圳市 B路', product_name: '框架指南', quantity: 1,
+    } } })
+    expect(wrapper.text()).toContain('乙 广东省 深圳市 B路')
+  })
   it.each<[ConfirmationAction, Record<string, unknown>, string]>([
     ['cancel_order', { order_id: 101, order_no: 'ORD-101' }, 'ORD-101'],
     ['refund_order', { order_id: 102, order_no: 'ORD-102', reason: '重复购买' }, '重复购买'],
     ['update_cart', { cart_id: 11, product_name: '测试耳机', quantity: 3 }, '测试耳机'],
-    ['update_cart_items', { items: [{ cart_id: 1 }, { cart_id: 2 }], quantity: 4 }, '目标数量4'],
+    ['update_cart_items', { items: [{ cart_id: 1 }, { cart_id: 2 }], quantity: 4 }, '修改后数量4'],
     ['remove_from_cart', { cart_id: 12, product_name: '测试耳机' }, '测试耳机'],
     ['clear_cart', {}, '当前购物车全部商品'],
     ['create_order', { product_id: 9, product_name: '测试耳机', quantity: 2, address_id: 7 }, '当前账号的收货地址'],
@@ -38,7 +44,7 @@ describe('ConfirmFacts', () => {
       props: { action: 'future_action', args: { secret: 'should-not-render' } },
     })
 
-    expect(wrapper.text()).toContain('服务端已锁定本次操作内容')
+    expect(wrapper.text()).toContain('请查看上方操作内容')
     expect(wrapper.text()).not.toContain('should-not-render')
   })
 })

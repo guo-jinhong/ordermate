@@ -48,7 +48,12 @@ class ApprovalWorkflow:
             config=self._config(thread_id),
         )
 
-    async def resume(self, thread_id: str, approved: bool) -> bool:
+    async def resume(self, thread_id: str, approved: bool, *, action: str | None = None, arguments: dict[str, Any] | None = None) -> bool:
+        # 进程重启后，从已校验的服务端持久化快照重建审批节点。
+        if action is not None:
+            snapshot = await self._graph.aget_state(self._config(thread_id))
+            if not snapshot.values:
+                await self.start(thread_id, action, arguments or {})
         result = await self._graph.ainvoke(
             Command(resume=approved), config=self._config(thread_id)
         )

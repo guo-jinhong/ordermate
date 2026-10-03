@@ -30,6 +30,11 @@ public class OrderController {
         return ApiResponse.success(orderDTO, "Order created successfully");
     }
 
+    @GetMapping("/by-intent/{key}")
+    public ApiResponse<OrderDTO> getOrderByIntent(Authentication authentication, @PathVariable String key) {
+        return ApiResponse.success(orderService.getOrderByIdempotencyKey((Long) authentication.getPrincipal(), key));
+    }
+
     @Operation(summary = "Get order by ID")
     @GetMapping("/{orderId}")
     public ApiResponse<OrderDTO> getOrder(

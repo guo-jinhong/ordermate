@@ -14,6 +14,7 @@ export interface PromptAction {
   displayPrompt?: string
   label: string
   authRequired: boolean
+  preserveScroll?: boolean
 }
 
 export type RunPhase = 'connecting' | 'streaming' | 'done' | 'error' | 'cancelled'
@@ -24,9 +25,11 @@ export type ConfirmationPhase =
   | 'executed'
   | 'cancelled'
   | 'failed'
+  | 'unknown'
 
 export interface UserMessage {
   id: string
+  preserveScroll?: boolean
   role: 'user'
   text: string
   at: number
@@ -42,6 +45,7 @@ export interface SystemNotice {
 /** 一条助手消息由可独立缺失的文本、状态、引用、结果和确认块组成。 */
 export interface AssistantMessage {
   id: string
+  preserveScroll?: boolean
   role: 'assistant'
   /** 与本次运行绑定，用于阻止旧流写回新会话。 */
   runId: string

@@ -32,7 +32,7 @@ describe('AssistantMessage', () => {
     expect(wrapper.get('details .answer').text()).toBe('无线降噪耳机 的说明和注意事项')
     expect(wrapper.get('h4').text()).toBe('无线降噪耳机')
   })
-  it('renders answer text and reference context', () => {
+  it('keeps reference metadata out of customer replies', () => {
     const wrapper = mount(AssistantMessage, {
       props: {
         message: message({
@@ -42,7 +42,8 @@ describe('AssistantMessage', () => {
     })
 
     expect(wrapper.text()).toContain('这是回答')
-    expect(wrapper.text()).toContain('已结合上下文指代：上一件商品')
+    expect(wrapper.text()).not.toContain('上下文指代')
+    expect(wrapper.text()).not.toContain('上一件商品')
   })
 
   it('renders streaming status and raw fallback data', () => {
@@ -61,6 +62,22 @@ describe('AssistantMessage', () => {
     expect(wrapper.text()).toContain('查看未识别数据')
   })
 
+  it('offers retry for the latest failed response', async () => {
+    const wrapper = mount(AssistantMessage, {
+      props: {
+        canRetry: true,
+        message: message({
+          status: { text: '服务暂时不可用，请稍后重试。', tone: 'error' },
+          streamPhase: 'error',
+        }),
+      },
+    })
+
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.get('[role="alert"]').text()).toContain('服务暂时不可用')
+    expect(wrapper.emitted('retry')).toEqual([[]])
+  })
+
   it('forwards a confirmation decision from the confirmation card', async () => {
     const wrapper = mount(AssistantMessage, {
       props: {
@@ -75,7 +92,7 @@ describe('AssistantMessage', () => {
       },
     })
 
-    await wrapper.findAll('button')[1]!.trigger('click')
+    await wrapper.get('button.confirm').trigger('click')
 
     expect(wrapper.emitted('confirm')).toEqual([[true]])
   })

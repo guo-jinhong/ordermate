@@ -17,6 +17,9 @@ import AppTopbar from './AppTopbar.vue'
 const session = useSessionStore()
 const view = useViewStore()
 const healthPoll = useHealthPoll()
+watch(healthPoll.health, health => {
+  if (health) session.chatLoginRequired = health.chat_login_required ?? false
+}, { immediate: true })
 const { announcement, announce } = useSrAnnounce()
 const { rememberTrigger, focusFirst, restoreFocus, trapFocus } = useFocusRestore()
 useChatAnnouncements(announce)
@@ -98,12 +101,12 @@ onUnmounted(() => window.removeEventListener('keydown', handleEscape))
 </template>
 
 <style scoped>
-.app-shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); height: 100dvh; min-height: 0; overflow: hidden; }
-.app-shell[data-view="developer"] { grid-template-columns: 280px minmax(0, 1fr) 360px; }
+.app-shell { display: grid; grid-template-columns: 252px minmax(0, 1fr); height: 100dvh; min-height: 0; overflow: hidden; }
+.app-shell[data-view="developer"] { grid-template-columns: 252px minmax(0, 1fr) 360px; }
 .sidebar, .main-column, .inspector-panel { min-height: 0; }.main-column { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; overflow: hidden; }
 .backdrop { display: none; }
 @media (max-width: 1100px) {
-  .app-shell[data-view="developer"] { grid-template-columns: 280px minmax(0, 1fr); }
+  .app-shell[data-view="developer"] { grid-template-columns: 252px minmax(0, 1fr); }
   .inspector-panel { position: fixed; z-index: 40; inset-block: 0; inset-inline-end: 0; width: min(380px, 92vw); box-shadow: var(--shadow-lg); }
   .app-shell[data-view="developer"] .backdrop { display: block; position: fixed; z-index: 30; inset: 0; background: var(--color-backdrop); border: 0; }
 }

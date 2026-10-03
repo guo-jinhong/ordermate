@@ -13,10 +13,11 @@ import {
 describe('business labels', () => {
   it('maps known tools and hides unknown internal names', () => {
     expect(toolBusinessLabel('refund_order')).toBe('申请订单退款')
-    expect(toolBusinessLabel('internal_future_tool')).toBe('调用业务工具')
+    expect(toolBusinessLabel('internal_future_tool')).toBe('处理您的请求')
   })
 
   it('provides status copy for each outcome class', () => {
+    expect(toolStatusCopy('cancel_order', 'confirmation_required')).toMatchObject({ status: '等待确认', tone: 'warning' })
     expect(toolStatusCopy('search_products', 'success').tone).toBe('success')
     expect(toolStatusCopy('search_products', 'error').tone).toBe('error')
     expect(toolStatusCopy('search_products', 'clarification_needed').tone).toBe('warning')
@@ -39,8 +40,8 @@ describe('business labels', () => {
 
   it('provides safe generic confirmation copy for future actions', () => {
     expect(confirmationPresentation('future_action')).toMatchObject({
-      title: '确认执行这项操作？',
-      confirmLabel: '确认执行',
+      title: '确认进行这项操作？',
+      confirmLabel: '确认操作',
     })
   })
 

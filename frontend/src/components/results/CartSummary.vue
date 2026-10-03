@@ -5,7 +5,7 @@ import { finiteAmount, finitePositiveInteger, formatCurrency } from '../../lib/f
 import type { PromptAction } from '../../types/chat'
 import type { CartRecord } from '../../types/results'
 
-const props = defineProps<{ items: CartRecord[] }>()
+const props = withDefaults(defineProps<{ items: CartRecord[]; busy?: boolean; managing?: boolean }>(), { busy: false, managing: false })
 const emit = defineEmits<{ prompt: [action: PromptAction] }>()
 
 const summary = computed(() => {
@@ -19,7 +19,7 @@ const summary = computed(() => {
     itemCount: quantities.reduce<number>((total, value) => total + (value ?? 0), 0),
     completeQuantity: quantities.every((value) => value != null),
     completeTotal: subtotals.every((value) => value != null),
-    hasKnownTotal: subtotals.some((value) => value != null),
+    hasKnownTotal: props.items.length === 0 || subtotals.some((value) => value != null),
     total: subtotals.reduce<number>((total, value) => total + (value ?? 0), 0),
   }
 })
@@ -37,9 +37,10 @@ const summary = computed(() => {
       </strong>
       <strong v-else>合计金额待确认</strong>
     </div>
-    <button
+    <button v-if="managing"
       type="button"
-      @click="emit('prompt', { prompt: '清空我的购物车', label: '清空个人购物车', authRequired: true })"
+      :disabled="busy"
+      @click="emit('prompt', { prompt: '清空我的购物车', label: '清空个人购物车', authRequired: true, preserveScroll: true })"
     >
       清空购物车
     </button>
@@ -47,6 +48,10 @@ const summary = computed(() => {
 </template>
 
 <style scoped>
-.cart-summary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4); color: var(--color-on-dark); background: var(--color-navy-raised); border-radius: var(--radius-lg); }.cart-summary div { display: grid; gap: var(--space-1); }.cart-summary span { color: var(--color-on-dark-muted); font-size: var(--text-sm); }.cart-summary strong { font-size: var(--text-lg); }.cart-summary button { min-height: var(--control-height-md); padding-inline: var(--space-4); color: var(--color-danger-soft); background: transparent; border: 1px solid var(--color-danger); border-radius: var(--radius-md); font-weight: 700; }
-@media (max-width: 680px) { .cart-summary { align-items: stretch; flex-direction: column; }.cart-summary button { width: 100%; } }
+.cart-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0 12px; }
+.cart-summary div { display: flex; flex-direction: column-reverse; gap: 4px; }
+.cart-summary span { color: var(--color-muted); font-size: 13px; }
+.cart-summary strong { color: var(--color-navy); font-size: 21px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.cart-summary button { min-height: 44px; padding: 0 8px; color: var(--color-danger); background: transparent; border: 0; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

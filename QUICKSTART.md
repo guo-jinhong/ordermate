@@ -22,12 +22,6 @@ docker compose up --build -d
 docker compose ps
 ```
 
-也可以使用 Windows 辅助脚本：
-
-```powershell
-.\start-demo.ps1
-```
-
 默认服务和地址：
 
 | 服务 | 地址/端口 |
@@ -71,21 +65,9 @@ Invoke-RestMethod http://localhost:8000/health
 docker compose down
 ```
 
-或：
-
-```powershell
-.\stop-demo.ps1
-```
-
 普通停止不会删除 MySQL volume。
 
 ## 6. 重置演示数据
-
-只重置脚本支持的演示订单状态：
-
-```powershell
-.\reset-demo.ps1
-```
 
 彻底删除容器数据并重新初始化：
 
@@ -141,23 +123,20 @@ python -m venv .venv
 
 ## 9. Windows 本地进程模式
 
-如果需要不通过 Docker 启动 Java 和 Python 进程，可使用：
+如果需要不通过 Docker 启动本地 Java、Agent 和 Vue，可双击根目录的 `一键启动Vue.bat`；需要临时公网演示时双击 `一键启动公网.bat`。
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-local-full.ps1
+.\start-dev-stack.ps1
 ```
 
 该模式默认使用：
 
-- Agent：`http://localhost:18000`
+- Vue：`http://localhost:5173`
+- Agent：`http://localhost:8000`
 - Java：`http://localhost:8080/api`
 - MySQL：`localhost:3306`
 
-停止：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\stop-local-full.ps1
-```
+停止时关闭各服务窗口；公网演示还需关闭 ngrok 窗口。
 
 Docker 模式和本地进程模式端口不同，详细参数见 [docs/development.md](docs/development.md)。
 

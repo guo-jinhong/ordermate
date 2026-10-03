@@ -30,24 +30,24 @@ const facts = computed<Fact[]>(() => {
     case 'update_cart':
       return [
         { label: '商品', value: display(args.product_name, '购物车中的商品') },
-        { label: '目标数量', value: display(args.quantity) },
+        { label: '修改后数量', value: display(args.quantity) },
       ]
     case 'update_cart_items': {
       const items = Array.isArray(args.items) ? args.items : []
       return [
-        { label: '影响范围', value: items.length ? `${items.length} 个购物车项` : '数量待确认' },
-        { label: '目标数量', value: display(args.quantity) },
+        { label: '涉及商品', value: items.length ? `${items.length} 种商品` : '数量待确认' },
+        { label: '修改后数量', value: display(args.quantity) },
       ]
     }
     case 'remove_from_cart':
       return [{ label: '商品', value: display(args.product_name, '购物车中的商品') }]
     case 'clear_cart':
-      return [{ label: '影响范围', value: '当前购物车全部商品' }]
+      return [{ label: '涉及商品', value: '当前购物车全部商品' }]
     case 'create_order':
       return [
         { label: '商品', value: display(args.product_name, '该商品') },
         { label: '数量', value: display(args.quantity) },
-        { label: '收货地址', value: '当前账号的收货地址' },
+        { label: '收货地址', value: display(args.address_summary, '当前账号的收货地址') },
         ...(args.payment_method
           ? [{ label: '支付方式', value: display(args.payment_method) }]
           : []),
@@ -55,7 +55,7 @@ const facts = computed<Fact[]>(() => {
     case 'pay_order':
       return [{ label: '订单', value: display(args.order_no, '当前订单') }]
     default:
-      return [{ label: '影响范围', value: '服务端已锁定本次操作内容' }]
+      return [{ label: '涉及商品', value: '请查看上方操作内容' }]
   }
 })
 </script>

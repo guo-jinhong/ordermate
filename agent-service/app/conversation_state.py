@@ -37,9 +37,11 @@ class ConversationState:
 
     last_order_id: int | None = None
     last_order_no: str | None = None
+    last_order_selected: bool = False
     last_product_keyword: str | None = None
     last_product_id: int | None = None
     last_product_name: str | None = None
+    last_product_selected: bool = False
     shown_product_ids: list[int] = field(default_factory=list)
     shown_products: list[dict[str, object]] = field(default_factory=list)
     last_cart_viewed: bool = False
@@ -47,6 +49,7 @@ class ConversationState:
     pending_confirmation_token: str | None = None
     pending_confirmation_action: str | None = None
     pending_confirmation_arguments: dict[str, object] | None = None
+    pending_cart_clarification: dict[str, object] | None = None
     last_knowledge_topic: str | None = None
     turn_count: int = 0
     last_topic: str | None = None
@@ -62,14 +65,16 @@ class ConversationState:
         self.last_product_keyword = other.last_product_keyword
         self.last_product_id = other.last_product_id
         self.last_product_name = other.last_product_name
+        self.last_product_selected = other.last_product_selected
         self.shown_product_ids = list(other.shown_product_ids)
         self.shown_products = [dict(item) for item in other.shown_products]
         if other.last_topic == "product":
             self.last_topic = "product"
 
-    def record_order(self, order_id: int | None, order_no: str | None = None) -> None:
+    def record_order(self, order_id: int | None, order_no: str | None = None, *, selected: bool = True) -> None:
         self.last_order_id = order_id
         self.last_order_no = order_no
+        self.last_order_selected = selected
         self.last_topic = "order"
         self.turn_count += 1
         self.updated_at = time.monotonic()
@@ -83,10 +88,9 @@ class ConversationState:
         shown_products: list[dict[str, object]] | None = None,
     ) -> None:
         self.last_product_keyword = keyword
-        if product_id is not None:
-            self.last_product_id = product_id
-        if product_name:
-            self.last_product_name = product_name
+        self.last_product_id = product_id
+        self.last_product_name = product_name
+        self.last_product_selected = False
         if shown_product_ids is not None:
             self.shown_product_ids = shown_product_ids
         if shown_products is not None:
@@ -103,6 +107,7 @@ class ConversationState:
                     resolved_name = str(product["name"])
                     break
         self.last_product_id = product_id
+        self.last_product_selected = True
         if resolved_name:
             self.last_product_name = resolved_name
             if not any(item.get("id") == product_id for item in self.shown_products):
@@ -114,46 +119,29 @@ class ConversationState:
         self.updated_at = time.monotonic()
 
     def resolve_product_id(self, message: str, explicit: int | None) -> int | None:
+        # 卡片编号和用户明确指定的编号优先，不能回退到历史商品。
+        requested = extract_entity_id(message, "product")
+        if requested is not None:
+            return requested
         if explicit is not None:
             return explicit
         matched = self.find_product_id_by_message(message)
         if matched is not None:
             return matched
-        if self.last_topic == "product" and self._matches_any(
-            message, [r"加入购物车", r"加购物车", r"放购物车", r"添加购物车", r"购买", r"买", r"下单"]
-        ):
-            return self.last_product_id
-        if self._matches_any(message, _REFERRAL_PATTERNS["product"]):
+        if quoted_entity_name(message):
+            return None
+        reference = self.last_topic == "product" or self._matches_any(message, _REFERRAL_PATTERNS["product"])
+        ambiguous_list = max(len(self.shown_products), len(self.shown_product_ids)) > 1 and not self.last_product_selected
+        if reference and is_generic_product_reference(message) and not ambiguous_list:
             return self.last_product_id
         return None
 
     def find_product_id_by_message(self, message: str) -> int | None:
-        normalized_message = _normalize_product_text(message)
-        if not normalized_message:
-            return None
-        for product in self.shown_products:
-            product_id = product.get("id")
-            name = product.get("name")
-            if product_id is None or not name:
-                continue
-            normalized_name = _normalize_product_text(str(name))
-            if normalized_name and normalized_name in normalized_message:
-                return int(product_id)
-            for token in _product_name_tokens(str(name)):
-                if token in normalized_message:
-                    return int(product_id)
-        for item in self.cart_items:
-            product_id = item.get("productId")
-            name = item.get("productName")
-            if product_id is None or not name:
-                continue
-            normalized_name = _normalize_product_text(str(name))
-            if normalized_name and normalized_name in normalized_message:
-                return int(product_id)
-            for token in _product_name_tokens(str(name)):
-                if token in normalized_message:
-                    return int(product_id)
-        return None
+        candidates = [(p.get("id"), p.get("name")) for p in self.shown_products]
+        candidates += [(p.get("productId"), p.get("productName")) for p in self.cart_items]
+        if self.last_product_id is not None and self.last_product_name:
+            candidates.append((self.last_product_id, self.last_product_name))
+        return match_named_entity(message, candidates)
 
     def product_name_for_id(self, product_id: int | None) -> str | None:
         if product_id is None:
@@ -192,24 +180,19 @@ class ConversationState:
         self.record_cart_view()
 
     def resolve_cart_id(self, message: str, explicit: int | None) -> int | None:
+        requested = extract_entity_id(message, "cart")
+        if requested is not None:
+            return requested
         if explicit is not None:
             return explicit
-        if not self.cart_items:
+        matched = match_named_entity(message, [(p.get("cartId"), p.get("productName")) for p in self.cart_items])
+        if matched is not None:
+            return matched
+        if quoted_entity_name(message):
             return None
-        normalized_message = _normalize_product_text(message)
-        for item in self.cart_items:
-            cart_id = item.get("cartId")
-            product_name = item.get("productName")
-            if cart_id is None or not product_name:
-                continue
-            normalized_name = _normalize_product_text(str(product_name))
-            if normalized_name and normalized_name in normalized_message:
-                return int(cart_id)
-            for token in _product_name_tokens(str(product_name)):
-                if token in normalized_message:
-                    return int(cart_id)
-        if len(self.cart_items) == 1 and self._matches_any(
-            message, [r"它", r"这个", r"那个", r"刚刚", r"刚才", r"购物车", r"数量", r"改", r"修改"]
+        # 只有明确代词或未指定名称的数量指令才可引用唯一购物车项。
+        if len(self.cart_items) == 1 and re.fullmatch(
+            r"(?:请|帮我|把|将|购物车(?:中|里)?|的|商品|它|这个|那个|刚刚|刚才|数量|改为|改成|改|修改|调整|移除|删除|删掉|减少|增加|到|为|至|[\d一二两三四五六七八九十]+|件|个|台|本|份|双|[\s，,。！!])*", message
         ):
             cart_id = self.cart_items[0].get("cartId")
             return int(cart_id) if cart_id is not None else None
@@ -251,9 +234,14 @@ class ConversationState:
         self.updated_at = time.monotonic()
 
     def resolve_order_id(self, message: str, explicit: int | None) -> int | None:
+        requested = extract_entity_id(message, "order")
+        if requested is not None:
+            return requested
         if explicit is not None:
             return explicit
-        if self._matches_any(message, _REFERRAL_PATTERNS["order"]):
+        if self.last_order_no and self.last_order_no.lower() in message.lower():
+            return self.last_order_id
+        if self.last_topic == "order" and self.last_order_selected and self._matches_any(message, _REFERRAL_PATTERNS["order"]):
             return self.last_order_id
         return None
 
@@ -276,6 +264,44 @@ class ConversationState:
     @staticmethod
     def _matches_any(message: str, patterns: list[str]) -> bool:
         return any(re.search(pattern, message) for pattern in patterns)
+
+
+def extract_entity_id(message: str, kind: str) -> int | None:
+    patterns = {
+        "product": r"(?:商品|产品|product)(?:\s*(?:编号|id))?\s*#?\s*(\d+)(?![\d.])",
+        "cart": r"(?:购物车项|cart\s*id|cartid|购物车)\s*#?\s*(\d+)(?![\d.])",
+        "order": r"(?:订单|order)(?:\s*(?:编号|id))?\s*#?\s*(\d+)(?![\d.])",
+    }
+    text = re.sub(r'[「“"]([^」”"]+)[」”"]', '', message)
+    matches = {int(match.group(1)) for match in re.finditer(patterns[kind], text, re.IGNORECASE)}
+    if kind == "product":
+        matches.update(int(match.group(1)) for match in re.finditer(r"(\d+)\s*号\s*(?:商品|产品)", text))
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def quoted_entity_name(message: str) -> str | None:
+    match = re.search(r'[「“\"]([^」”\"]+)[」”\"]', message)
+    return match.group(1).strip() if match else None
+
+
+def is_generic_product_reference(message: str) -> bool:
+    return bool(re.fullmatch(
+        r"(?:请|帮我|把|将|再|还|我想|我要|想要|要|买|购买|下单|加入购物车|加购物车|放购物车|添加购物车|查看|看看|详情|详细|信息|的|它|这个商品|那个商品|这款(?:产品)?|该商品|刚才的商品|刚刚的商品|上面的商品|商品|数量|[\d一二两三四五六七八九十]+|件|个|台|部|只|本|份|双|[\s，,。！!])*", message
+    ))
+
+
+def match_named_entity(message: str, candidates: list[tuple[object, object]]) -> int | None:
+    quoted = quoted_entity_name(message)
+    target = _normalize_product_text(quoted or message)
+    names = [(int(entity_id), str(name)) for entity_id, name in candidates if entity_id is not None and name]
+    exact = {entity_id for entity_id, name in names if (_normalize_product_text(name) == target if quoted else _normalize_product_text(name) in target)}
+    if exact:
+        return next(iter(exact)) if len(exact) == 1 else None
+    if quoted:
+        return None
+    # 全名优先于别名；共享品牌/单词匹配到多个对象时必须澄清。
+    partial = {entity_id for entity_id, name in names if any(token in target for token in _product_name_tokens(name))}
+    return next(iter(partial)) if len(partial) == 1 else None
 
 
 def _normalize_product_text(text: str) -> str:
@@ -354,6 +380,10 @@ class ConversationStateStore:
             self._purge_expired_locked()
             state.updated_at = self._clock()
             self._states[key] = state
+
+    async def clear(self, session_id: str, access_token: str | None) -> bool:
+        async with self._lock:
+            return self._states.pop(self._key(session_id, access_token), None) is not None
 
     async def clear_session(self, session_id: str) -> int:
         async with self._lock:

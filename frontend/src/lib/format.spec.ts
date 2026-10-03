@@ -20,6 +20,9 @@ describe('format helpers', () => {
     expect(finitePositiveInteger('3')).toBe(3)
     expect(finitePositiveInteger(1.5)).toBeNull()
     expect(finitePositiveInteger(0)).toBeNull()
+    expect(finitePositiveInteger(true)).toBeNull()
+    expect(finitePositiveInteger([8])).toBeNull()
+    expect(finitePositiveInteger('9007199254740993')).toBeNull()
   })
 
   it('degrades invalid dates', () => {

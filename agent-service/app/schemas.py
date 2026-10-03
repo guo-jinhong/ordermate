@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +36,7 @@ class Confirmation(BaseModel):
     action: str
     description: str
     arguments: dict[str, Any]
+    expires_at: datetime | None = None
 
 
 class ToolCallRecord(BaseModel):
@@ -92,6 +94,8 @@ class HealthResponse(BaseModel):
     embedding_mode: str
     fallback_reason: str | None = None
     backend_base_url: str
+    public_demo: bool = False
+    chat_login_required: bool = False
     checks: dict[str, str] | None = None
 
 

@@ -6,6 +6,21 @@ import { useChatStore } from '../../stores/chat'
 import MessageList from './MessageList.vue'
 
 describe('MessageList scroll behavior', () => {
+  it('does not jump away while a cart operation adds and completes messages', async () => {
+    const pinia = createPinia()
+    const wrapper = mount(MessageList, { global: { plugins: [pinia] } })
+    const chat = useChatStore(pinia)
+    const element = wrapper.get('.message-list').element as HTMLElement
+    const scrollTo = vi.fn()
+    Object.defineProperty(element, 'scrollTo', { configurable: true, value: scrollTo })
+    chat.messages.push({ id: 'operation', role: 'user', text: '修改数量', at: 1, preserveScroll: true })
+    await flushPromises()
+    chat.messages.push({ id: 'reply', role: 'assistant', runId: 'run', at: 1, preserveScroll: true, text: '已修改', status: null, reference: null, results: { kind: 'none' }, confirmation: null, confirmationPhase: 'pending', confirmationResult: null, streamPhase: 'done' })
+    await flushPromises()
+    expect(scrollTo).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('keeps the reader position during updates and follows again at the bottom', async () => {
     const pinia = createPinia()
     const wrapper = mount(MessageList, { global: { plugins: [pinia] } })

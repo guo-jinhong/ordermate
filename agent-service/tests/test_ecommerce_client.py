@@ -7,6 +7,27 @@ from app.clients.ecommerce_client import EcommerceApiError, EcommerceClient
 
 
 @pytest.mark.asyncio
+async def test_batch_quantities_use_one_http_request_with_previous_values():
+    import json
+    requests = []
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={'code': 200, 'data': None})
+    client = EcommerceClient('http://backend.test/api')
+    await client._client.aclose()
+    client._client = httpx.AsyncClient(base_url='http://backend.test/api', transport=httpx.MockTransport(handler))
+    try:
+        await client.update_cart_items([{'cart_id': 71, 'quantity': 1, 'previous_quantity': 3},
+                                       {'cart_id': 72, 'quantity': 1, 'previous_quantity': 2}], 'jwt')
+    finally:
+        await client.close()
+    assert len(requests) == 1
+    assert requests[0].method == 'PUT'
+    assert requests[0].url.path == '/api/shopping-cart/batch'
+    assert json.loads(requests[0].content) == [dict(cartId=71, quantity=1, previousQuantity=3), dict(cartId=72, quantity=1, previousQuantity=2)]
+
+
+@pytest.mark.asyncio
 async def test_local_backend_bypasses_environment_proxy():
     client = EcommerceClient("http://127.0.0.1:8080/api")
     try:

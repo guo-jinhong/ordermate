@@ -1,6 +1,25 @@
 TOOLS = [
     {
         "type": "function",
+        "name": "update_cart_items",
+        "description": "Set the quantity of all selected shopping-cart items. Read get_cart first for current cart IDs. Requires login; execute directly and verify. Does not change inventory.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "minItems": 1, "items": {
+                    "type": "object", "properties": {
+                        "cart_id": {"type": "integer", "minimum": 1},
+                        "quantity": {"type": "integer", "minimum": 1}
+                    }, "required": ["cart_id", "quantity"], "additionalProperties": False
+                }},
+                "quantity": {"type": "integer", "minimum": 1}
+            },
+            "required": ["items", "quantity"], "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
         "name": "search_knowledge_base",
         "description": (
             "Search knowledge bases. Two isolated stores exist: 'rule' for after-sales "
@@ -145,8 +164,7 @@ TOOLS = [
         "type": "function",
         "name": "update_cart",
         "description": (
-            "Prepare changing the quantity of one shopping-cart item. Requires login and "
-            "explicit user confirmation before execution."
+            "Change the quantity of one item in the current logged-in user's cart. Execute directly and verify the result."
         ),
         "strict": True,
         "parameters": {
@@ -171,8 +189,7 @@ TOOLS = [
         "type": "function",
         "name": "remove_from_cart",
         "description": (
-            "Prepare removing one shopping-cart item. Requires login and explicit user "
-            "confirmation before execution."
+            "Remove one item from the current logged-in user's cart. Execute directly and verify the result."
         ),
         "strict": True,
         "parameters": {
@@ -256,34 +273,10 @@ TOOLS = [
     },
     {
         "type": "function",
-        "name": "refund_order",
-        "description": (
-            "Apply for a refund for the current logged-in user's paid or shipped order. "
-            "Requires login and explicit user confirmation before execution."
-        ),
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "order_id": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Order ID.",
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "Refund reason.",
-                },
-            },
-            "required": ["order_id"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
         "name": "create_order",
         "description": (
-            "Prepare creating an order with demo address ID 1 and DEMO payment method. "
+            "Prepare creating an order with the current user's default shipping address "
+            "(or first saved address if no default exists) and DEMO payment method. "
             "Requires login and explicit user confirmation before execution."
         ),
         "strict": True,

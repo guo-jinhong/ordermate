@@ -48,8 +48,8 @@ export interface ProductSearchContext {
 export type ResultKind = 'product' | 'cart' | 'order'
 
 export type ResultPayload =
-  | { kind: 'product'; items: ProductRecord[]; context: ProductSearchContext }
-  | { kind: 'cart'; items: CartRecord[] }
+  | { kind: 'product'; items: ProductRecord[]; context: ProductSearchContext; summaryOnly?: boolean }
+  | { kind: 'cart'; items: CartRecord[]; summaryOnly?: boolean; preserveState?: boolean; stale?: boolean; feedback?: string }
   | { kind: 'order'; items: OrderRecord[] }
   | { kind: 'empty'; emptyKind: ResultKind }
   | { kind: 'raw'; value: unknown }

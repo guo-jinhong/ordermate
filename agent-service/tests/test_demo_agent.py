@@ -11,6 +11,7 @@ from app.tools.registry import ToolRegistry
 
 class FakeEcommerce:
     def __init__(self):
+        self.removed = False
         self.cart_adds = []
 
     async def search_products(
@@ -47,6 +48,8 @@ class FakeEcommerce:
         ]
 
     async def get_cart(self, access_token: str | None):
+        if self.removed:
+            return []
         return [
             {
                 "cartId": 7,
@@ -56,6 +59,10 @@ class FakeEcommerce:
                 "quantity": 1,
             }
         ]
+
+    async def remove_from_cart(self, cart_id, access_token):
+        assert cart_id == 7
+        self.removed = True
 
     async def add_to_cart(self, product_id: int, quantity: int, access_token: str | None):
         self.cart_adds.append((product_id, quantity, access_token))
@@ -233,6 +240,7 @@ async def test_demo_agent_adds_referenced_product_to_cart_without_confirmation()
     agent = DemoAgentService(registry, state_store=state_store)
 
     await agent.chat("推荐手机", session_id="session-cart", access_token="jwt")
+    await agent.chat("查看商品 1 的详情", session_id="session-cart", access_token="jwt")
     result = await agent.chat("把它加入购物车", session_id="session-cart", access_token="jwt")
 
     assert result.tool_calls[0].name == "add_to_cart"
@@ -254,8 +262,9 @@ async def test_demo_agent_resolves_cart_action_by_product_name():
         access_token="jwt",
     )
 
-    assert result.confirmation is not None
-    assert result.confirmation.arguments["product_name"] == "入门手机"
+    assert result.confirmation is None
+    assert result.tool_calls[-1].outcome == "success"
+    assert result.data == []
     assert "入门手机" in result.answer
     assert "cartId" not in result.answer
 
@@ -297,6 +306,7 @@ async def test_demo_agent_create_order_requires_confirmation():
     agent = DemoAgentService(registry, state_store=state_store)
 
     await agent.chat("推荐手机", session_id="session-order", access_token="jwt")
+    await agent.chat("查看商品 1 的详情", session_id="session-order", access_token="jwt")
     result = await agent.chat("买 1 个它", session_id="session-order", access_token="jwt")
 
     assert result.tool_calls[0].name == "create_order"

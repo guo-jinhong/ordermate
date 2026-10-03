@@ -61,6 +61,7 @@ export interface Confirmation {
   action: ConfirmationAction
   description: string
   arguments: Record<string, unknown>
+  expires_at?: string | null
 }
 
 export interface ChatResponse {
@@ -92,7 +93,7 @@ export interface ConfirmRequest {
   access_token?: string | null
 }
 
-export type ConfirmStatus = 'executed' | 'cancelled'
+export type ConfirmStatus = 'executed' | 'cancelled' | 'unknown' | 'failed'
 
 export interface ConfirmResponse {
   status: ConfirmStatus
@@ -110,6 +111,8 @@ export interface HealthResponse {
   llm_model?: string | null
   embedding_mode: string
   fallback_reason?: string | null
+  public_demo?: boolean
+  chat_login_required?: boolean
   backend_base_url: string
   checks?: Record<string, string>
 }

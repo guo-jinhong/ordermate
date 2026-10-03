@@ -66,10 +66,15 @@ services:
       MYSQL_PASSWORD: agent_readonly_123456
       MYSQL_DATABASE: ecommerce_db
       REQUEST_TIMEOUT_SECONDS: 20
+      CHAT_TIMEOUT_SECONDS: ${CHAT_TIMEOUT_SECONDS:-60}
+      READ_RETRY_BUDGET_SECONDS: ${READ_RETRY_BUDGET_SECONDS:-20}
+      OPERATION_DB_PATH: /app/data/agent_operations.db
       CONVERSATION_MAX_MESSAGES: ${CONVERSATION_MAX_MESSAGES:-12}
       CONVERSATION_TTL_SECONDS: ${CONVERSATION_TTL_SECONDS:-1800}
       # 公网安全：共享账号下禁用写操作（购物车/下单/支付/取消/退款）
-      PUBLIC_READONLY: ${PUBLIC_READONLY:-true}
+      PUBLIC_READONLY: ${PUBLIC_READONLY:-false}
+    volumes:
+      - agent-operation-data:/app/data
     # 只信任 Nginx(frontend) 的代理头，防止客户端伪造 X-Forwarded-For
     command:
       [
@@ -127,4 +132,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  agent-operation-data:
   mysql-data:

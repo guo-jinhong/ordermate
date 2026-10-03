@@ -153,19 +153,11 @@ class EcommerceClient:
         address_id: int,
         payment_method: str,
         access_token: str | None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """创建订单"""
         try:
             user_id = self._parse_user_id(access_token)
-            # 检查库存
-            has_stock, current_stock = self._run_sync(
-                self.repo.check_stock, product_id, quantity
-            )
-            if not has_stock:
-                raise EcommerceApiError(
-                    f"库存不足，当前库存为 {current_stock} 件，无法购买 {quantity} 件"
-                )
-
             return self._run_sync(
                 self.repo.create_order,
                 user_id=user_id,
@@ -173,12 +165,23 @@ class EcommerceClient:
                 quantity=quantity,
                 address_id=address_id,
                 payment_method=payment_method,
+                idempotency_key=idempotency_key,
             )
         except EcommerceApiError:
             raise
         except Exception as e:
             logger.error(f"创建订单失败: {e}")
             raise EcommerceApiError(f"创建订单失败: {e}") from e
+
+    async def get_order_by_intent(self, key: str, access_token: str | None):
+        from app.database import Order
+        user_id = self._parse_user_id(access_token)
+        def query():
+            order = self.repo.session.query(Order).filter(Order.user_id == user_id, Order.idempotency_key == key).first()
+            if not order:
+                raise EcommerceApiError("订单不存在")
+            return self.repo._order_to_dict(order)
+        return self._run_sync(query)
 
     async def cancel_order(self, order_id: int, access_token: str | None) -> dict[str, Any]:
         """取消订单"""
@@ -237,6 +240,12 @@ class EcommerceClient:
         except Exception as e:
             logger.error(f"更新购物车失败: {e}")
             raise EcommerceApiError(f"更新购物车失败: {e}") from e
+
+    async def update_cart_items(self, items: list[dict], access_token: str | None) -> None:
+        try:
+            return self._run_sync(self.repo.update_cart_items, self._parse_user_id(access_token), items)
+        except Exception as exc:
+            raise EcommerceApiError(str(exc)) from exc
 
     async def remove_from_cart(
         self, cart_id: int, access_token: str | None

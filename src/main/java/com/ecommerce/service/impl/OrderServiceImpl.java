@@ -36,6 +36,7 @@ public class OrderServiceImpl implements OrderService {
     private final OrderItemRepository orderItemRepository;
     private final AddressRepository addressRepository;
     private final UserService userService;
+    private final UserRepository userRepository;
     private final ProductService productService;
     private final ShoppingCartService shoppingCartService;
     private final OrderPaymentService orderPaymentService;
@@ -46,7 +47,20 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public OrderDTO createOrder(Long userId, CreateOrderDTO createOrderDTO) {
-        User user = userService.getUserById(userId);
+        String intent = createOrderDTO.getIdempotencyKey();
+        // 用户行锁把同账号的幂等检查与创建纳入同一个数据库事务。
+        User user = intent == null ? userService.getUserById(userId) : userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        String requestHash = intent == null ? null : orderRequestHash(createOrderDTO);
+        if (intent != null) {
+            java.util.Optional<Order> existing = orderRepository.findByUserIdAndIdempotencyKey(userId, intent);
+            if (existing.isPresent()) {
+                if (!requestHash.equals(existing.get().getRequestHash())) {
+                    throw new BusinessException(409, "This purchase intent has different order details");
+                }
+                return OrderDTOConverter.convertToDTO(existing.get());
+            }
+        }
         Address address = addressRepository.findById(createOrderDTO.getAddressId())
                 .orElseThrow(() -> new ResourceNotFoundException("Address not found"));
 
@@ -58,6 +72,8 @@ public class OrderServiceImpl implements OrderService {
         String orderNo = "ORD-" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
         Order order = Order.builder()
                 .orderNo(orderNo)
+                .idempotencyKey(intent)
+                .requestHash(requestHash)
                 .user(user)
                 .shippingAddress(address.getProvince() + address.getCity() + address.getDistrict() + address.getAddress())
                 .shippingPhone(address.getPhone())
@@ -75,7 +91,9 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException("Order must contain at least one item");
         }
 
-        for (OrderItemDTO itemDTO : createOrderDTO.getItems()) {
+        // 所有多商品写入按商品 ID 加锁，避免请求顺序相反造成循环等待。
+        for (OrderItemDTO itemDTO : createOrderDTO.getItems().stream()
+                .sorted(java.util.Comparator.comparing(OrderItemDTO::getProductId)).toList()) {
             Product product = productService.getProductEntityForUpdate(itemDTO.getProductId());
 
             if (!Integer.valueOf(1).equals(product.getStatus())) {
@@ -123,6 +141,34 @@ public class OrderServiceImpl implements OrderService {
 
         log.info("Order created: orderNo={}, userId={}, expireAt={}", orderNo, userId, savedOrder.getExpireAt());
         return OrderDTOConverter.convertToDTO(savedOrder);
+    }
+
+    private String orderRequestHash(CreateOrderDTO request) {
+        // 忽略客户端金额字段，绑定地址、支付方式、备注、商品和数量。
+        if (request.getItems() == null || request.getItems().isEmpty()) {
+            throw new BusinessException("Order must contain at least one item");
+        }
+        String items = request.getItems().stream()
+                .sorted(java.util.Comparator.comparing(OrderItemDTO::getProductId))
+                .map(i -> i.getProductId() + ":" + i.getQuantity()).collect(Collectors.joining(","));
+        if (request.getItems().stream().map(OrderItemDTO::getProductId).distinct().count() != request.getItems().size()) {
+            throw new BusinessException("Duplicate product in order");
+        }
+        // 长度前缀消除备注中分隔符导致的歧义。
+        String remark = java.util.Objects.toString(request.getRemark(), "");
+        String method = java.util.Objects.toString(request.getPaymentMethod(), "");
+        String payload = request.getAddressId() + "|" + method.length() + ":" + method + "|" + remark.length() + ":" + remark + "|" + items;
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public OrderDTO getOrderByIdempotencyKey(Long userId, String key) {
+        return OrderDTOConverter.convertToDTO(orderRepository.findByUserIdAndIdempotencyKey(userId, key)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found")));
     }
 
     @Override
@@ -277,7 +323,8 @@ public class OrderServiceImpl implements OrderService {
      */
     private void releaseStock(Long orderId) {
         List<OrderItem> items = orderItemRepository.findByOrderId(orderId);
-        for (OrderItem item : items) {
+        for (OrderItem item : items.stream()
+                .sorted(java.util.Comparator.comparing(entry -> entry.getProduct().getId())).toList()) {
             Product product = productService.getProductEntityForUpdate(item.getProduct().getId());
             product.setStock(product.getStock() + item.getQuantity());
             product.setSoldCount(product.getSoldCount() - item.getQuantity());

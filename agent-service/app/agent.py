@@ -10,8 +10,11 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.audit import AuditLogger
+from app.clients.ecommerce_client import EcommerceApiError
+from app.business_fields import mutation_is_consultation, extract_quantity, denies_mutation, requests_refund, requests_cart_quantity_change, requests_all_cart_quantity_change, cart_quantity_arguments, vague_cart_quantity_request, cart_clarification_reply, complete_cart_clarification, requests_cart_removal
+from app.business_feedback import abandoned_action_reply, cart_add_reply, REFUND_UNAVAILABLE, confirmation_reply, customer_error_reply
 from app.conversation_memory import ConversationMemoryStore
-from app.conversation_state import ConversationState, ConversationStateStore
+from app.conversation_state import ConversationState, ConversationStateStore, extract_entity_id, quoted_entity_name, is_generic_product_reference
 from app.knowledge_base import knowledge_search_intent, route_knowledge_base
 from app.product_terms import translate_product_keyword
 from app.prompts import SYSTEM_PROMPT
@@ -104,38 +107,37 @@ def update_state_from_tool(state: ConversationState, tool_name: str, arguments: 
 
     if tool_name == "search_products":
         keyword = translate_product_keyword(arguments.get("keyword"))
-        if keyword:
-            product_id = None
-            product_name = None
-            products = data.get("content") if isinstance(data, dict) else data
-            shown_ids = []
-            if isinstance(products, list) and products and isinstance(products[0], dict):
-                product_id = products[0].get("id")
-                product_name = products[0].get("name")
-                shown_ids = [
-                    int(item["id"])
-                    for item in products
-                    if isinstance(item, dict) and item.get("id") is not None
-                ]
-                shown_products = [
-                    {
-                        "id": int(item["id"]),
-                        "name": str(item.get("name") or ""),
-                        "price": item.get("price"),
-                        "stock": item.get("stock"),
-                    }
-                    for item in products
-                    if isinstance(item, dict) and item.get("id") is not None
-                ]
-            else:
-                shown_products = []
-            state.record_product_search(
-                str(keyword),
-                int(product_id) if product_id is not None else None,
-                str(product_name) if product_name else None,
-                shown_ids,
-                shown_products,
-            )
+        product_id = None
+        product_name = None
+        products = data.get("content") if isinstance(data, dict) else data
+        shown_ids = []
+        if isinstance(products, list) and products and isinstance(products[0], dict):
+            product_id = products[0].get("id")
+            product_name = products[0].get("name")
+            shown_ids = [
+                int(item["id"])
+                for item in products
+                if isinstance(item, dict) and item.get("id") is not None
+            ]
+            shown_products = [
+                {
+                    "id": int(item["id"]),
+                    "name": str(item.get("name") or ""),
+                    "price": item.get("price"),
+                    "stock": item.get("stock"),
+                }
+                for item in products
+                if isinstance(item, dict) and item.get("id") is not None
+            ]
+        else:
+            shown_products = []
+        state.record_product_search(
+            str(keyword),
+            int(product_id) if product_id is not None else None,
+            str(product_name) if product_name else None,
+            shown_ids,
+            shown_products,
+        )
 
     elif tool_name == "get_product_detail":
         product_id = arguments.get("product_id")
@@ -146,13 +148,15 @@ def update_state_from_tool(state: ConversationState, tool_name: str, arguments: 
     elif tool_name == "get_my_orders":
         if isinstance(data, dict) and isinstance(data.get("content"), list):
             data = data["content"]
+        if isinstance(data, list) and not data:
+            state.record_order(None, selected=False)
         if isinstance(data, list) and data:
             first = data[0]
             if isinstance(first, dict):
                 order_id = first.get("id")
                 order_no = first.get("orderNo")
                 if order_id is not None:
-                    state.record_order(int(order_id), str(order_no) if order_no else None)
+                    state.record_order(int(order_id), str(order_no) if order_no else None, selected=len(data) == 1)
 
     elif tool_name == "get_order_detail":
         order_id = arguments.get("order_id")
@@ -175,10 +179,17 @@ def update_state_from_tool(state: ConversationState, tool_name: str, arguments: 
     elif tool_name == "add_to_cart":
         product_id = arguments.get("product_id")
         if product_id is not None:
-            state.record_product(int(product_id))
-        state.record_cart_view()
+            display = output.get("display") or {}
+            state.record_product(int(product_id), display.get("product_name"))
+        snapshot = output.get("cart_snapshot")
+        if isinstance(snapshot, list):
+            state.record_cart_items(snapshot)
+        else:
+            state.record_cart_view()
 
-    elif tool_name in {"update_cart", "remove_from_cart", "clear_cart"}:
+    elif tool_name in {"update_cart", "update_cart_items", "remove_from_cart", "clear_cart"}:
+        if isinstance(output.get("cart_snapshot"), list):
+            state.record_cart_items(output["cart_snapshot"])
         state.record_cart_view()
 
     elif tool_name in {"create_order", "pay_order"}:
@@ -212,6 +223,52 @@ def _guard_tool_call(
     state: ConversationState,
 ) -> str | None:
     lowered = message.lower()
+    if name in ToolRegistry._WRITE_TOOLS and mutation_is_consultation(message):
+        return "您是在咨询或引用操作，本次未操作。请明确要进行的操作。"
+    if name == "refund_order":
+        return REFUND_UNAVAILABLE
+    if name in {"add_to_cart", "update_cart", "update_cart_items", "remove_from_cart", "clear_cart", "create_order", "cancel_order", "pay_order", "refund_order"} and denies_mutation(message):
+        return "本轮包含否定操作的要求，未执行修改。请明确要执行的操作。"
+    if name == "cancel_order" and not _contains_any(lowered, "取消", "cancel"):
+        return "我不会在用户没有明确要求取消订单时调用取消工具。"
+    if name == "update_cart_items":
+        try:
+            expected_arguments = cart_quantity_arguments(message, state)
+        except ValueError as exc:
+            return str(exc)
+        if not expected_arguments or "items" not in expected_arguments:
+            return "请明确需要批量修改的购物车商品和目标数量。"
+        expected_items = {(item["cart_id"], item["quantity"]) for item in expected_arguments["items"]}
+        supplied = arguments.get("items") or []
+        if any(not isinstance(item, dict) for item in supplied):
+            return "工具参数与指定商品范围不一致，请重新核对。"
+        actual_items = {(item.get("cart_id"), item.get("quantity")) for item in supplied}
+        if actual_items != expected_items or len(supplied) != len(expected_items) or arguments.get("quantity") != expected_arguments["quantity"]:
+            return "工具参数与指定商品范围或数量不一致，请重新核对。"
+        return None
+    # 模型参数必须与本轮明确选择一致，不能把历史对象当成当前对象。
+    kind = "product" if name in {"add_to_cart", "create_order", "get_product_detail"} else "cart" if name in {"update_cart", "remove_from_cart"} else None
+    if kind:
+        key = "product_id" if kind == "product" else "cart_id"
+        expected = state.resolve_product_id(message, None) if kind == "product" else state.resolve_cart_id(message, None)
+        supplied = arguments.get(key)
+        if expected is not None and supplied is not None and str(supplied) != str(expected):
+            return "工具参数与本轮指定的商品或购物车项不一致，请重新核对编号。"
+        if expected is None:
+            return "无法唯一确认本轮指定的商品或购物车项，请提供准确名称或编号。"
+        try:
+            parsed_change = cart_quantity_arguments(message, state) if name == "update_cart" else None
+        except ValueError as exc:
+            return str(exc)
+        quantity = parsed_change.get("quantity") if parsed_change else _extract_quantity(message)
+        if quantity is not None and arguments.get("quantity") is not None and str(arguments["quantity"]) != str(quantity):
+            return "工具数量与本轮指定数量不一致，请重新核对。"
+    if name in {"cancel_order", "get_order_detail", "pay_order"}:
+        expected_order = state.resolve_order_id(message, None)
+        if expected_order is None:
+            return "无法确认本轮指定的订单，请提供准确订单编号或先查看订单详情。"
+        if arguments.get("order_id") is not None and str(arguments["order_id"]) != str(expected_order):
+            return "工具订单编号与本轮指定订单不一致，请重新核对。"
     if name == "cancel_order":
         if not _contains_any(lowered, "取消", "cancel"):
             return "我不会在用户没有明确要求取消订单时调用取消工具。"
@@ -231,22 +288,22 @@ def _guard_tool_call(
         return "只有用户询问订单时才会读取订单列表。"
 
     if name == "get_cart":
-        if _contains_any(lowered, "购物车", "cart"):
+        if _contains_any(lowered, "购物车", "cart") or requests_cart_quantity_change(message):
             return None
         return "只有用户询问购物车时才会读取购物车。"
 
     if name == "add_to_cart":
-        if _contains_any(lowered, "加购物车", "加入购物车", "放购物车", "添加购物车", "add to cart", "cart"):
+        if _contains_any(lowered, "加购物车", "加入购物车", "放购物车", "添加购物车", "add to cart"):
             return None
         return "只有用户明确要求加入购物车时才会修改购物车。"
 
     if name == "update_cart":
-        if _contains_any(lowered, "修改购物车", "购物车数量", "改数量", "update cart"):
+        if requests_cart_quantity_change(message):
             return None
         return "只有用户明确要求修改购物车数量时才会修改购物车。"
 
     if name == "remove_from_cart":
-        if _contains_any(lowered, "删除购物车", "移除购物车", "删掉购物车", "remove cart"):
+        if requests_cart_removal(message):
             return None
         return "只有用户明确要求删除购物车商品时才会修改购物车。"
 
@@ -428,16 +485,12 @@ def _is_confirmation_message(message: str) -> bool:
 
 
 def _extract_order_id_from_message(message: str) -> int | None:
-    match = re.search(r"(?:订单|order)\s*#?\s*(\d+)", message, re.IGNORECASE)
-    if match:
-        return int(match.group(1))
-    match = re.search(r"\b(\d+)\b", message)
-    if match:
-        return int(match.group(1))
-    return None
+    return extract_entity_id(message, "order")
 
 
 def _direct_cancel_order_arguments(message: str, state: ConversationState) -> dict[str, Any] | None:
+    if denies_mutation(message):
+        return None
     lowered = message.lower()
     if not _contains_any(lowered, "取消订单", "撤销订单", "作废订单", "cancel order", "revoke order"):
         return None
@@ -445,15 +498,13 @@ def _direct_cancel_order_arguments(message: str, state: ConversationState) -> di
     if order_id is None:
         order_id = state.resolve_order_id(message, None)
     if order_id is None:
-        recent_order = state.last_order_id
-        if recent_order is not None:
-            order_id = recent_order
-        else:
-            return None
+        return None
     return {"order_id": order_id}
 
 
 def _direct_clear_cart_arguments(message: str, state: ConversationState) -> dict[str, Any] | None:
+    if denies_mutation(message):
+        return None
     lowered = message.lower()
     if not _contains_any(lowered, "清空购物车", "清空全部", "clear cart", "empty cart"):
         return None
@@ -461,40 +512,23 @@ def _direct_clear_cart_arguments(message: str, state: ConversationState) -> dict
 
 
 def _direct_add_to_cart_arguments(message: str, state: ConversationState) -> dict[str, Any] | None:
+    if denies_mutation(message):
+        return None
     lowered = message.lower()
-    if not _contains_any(lowered, "加购物车", "加入购物车", "放购物车", "添加购物车", "add to cart", "cart"):
+    if not _contains_any(lowered, "加购物车", "加入购物车", "放购物车", "添加购物车", "add to cart"):
         return None
     product_id = state.resolve_product_id(message, None)
     if product_id is None:
         return None
+    quantity = _extract_quantity(message)
     return {
         "product_id": product_id,
-        "quantity": _extract_quantity(message) or 1,
+        "quantity": quantity if quantity is not None else 1,
     }
 
 
 def _direct_update_cart_arguments(message: str, state: ConversationState) -> dict[str, Any] | None:
-    lowered = message.lower()
-    if not _contains_any(lowered, "修改购物车", "购物车数量", "改数量", "数量改", "改成", "调整", "update cart"):
-        return None
-    quantity = _extract_quantity(message)
-    if quantity is None:
-        return None
-    if _contains_any(lowered, "都", "全部", "所有", "两件", "两个", "all", "both"):
-        items = [
-            {
-                "cart_id": int(item["cartId"]),
-                "quantity": quantity,
-            }
-            for item in state.cart_items
-            if item.get("cartId") is not None
-        ]
-        if items:
-            return {"items": items, "quantity": quantity}
-    cart_id = state.resolve_cart_id(message, None)
-    if cart_id is None:
-        return None
-    return {"cart_id": cart_id, "quantity": quantity}
+    return cart_quantity_arguments(message, state)
 
 
 def _answer_for_direct_tool(
@@ -504,57 +538,72 @@ def _answer_for_direct_tool(
     outcome: str,
     state: ConversationState,
 ) -> str:
+    if outcome == "success" and execution_output.get("message"):
+        return execution_output["message"]
     if name == "add_to_cart":
         display = execution_output.get("display")
         display_name = display.get("product_name") if isinstance(display, dict) else None
         product_name = display_name or state.product_name_for_id(arguments.get("product_id")) or "该商品"
         quantity = arguments.get("quantity") or 1
         if outcome == "success":
-            return f"已将「{product_name}」加入购物车，共 {quantity} 件。"
-        return f"加入购物车没有成功：{execution_output.get('error', '业务系统返回错误')}。"
+            return cart_add_reply(arguments, execution_output, product_name)
+        return customer_error_reply(execution_output.get("error"))
+    if name == "remove_from_cart":
+        if outcome == "confirmation_required":
+            data = execution_output.get("data") or {}
+            product_name = data.get("product_name") or state.cart_product_name_for_id(arguments.get("cart_id")) or "该商品"
+            return confirmation_reply(f"从购物车移除「{product_name}」")
+        return customer_error_reply(execution_output.get("error"))
     if name == "update_cart":
         quantity = arguments.get("quantity")
+        if execution_output.get("unchanged"):
+            return f"这件商品在购物车中已经是 {quantity} 件，无需重复修改。"
         data = execution_output.get("data")
         data_name = data.get("product_name") if isinstance(data, dict) else None
         product_name = data_name or state.cart_product_name_for_id(arguments.get("cart_id")) or "该商品"
         if outcome == "confirmation_required":
-            return f"已准备将「{product_name}」的数量改为 {quantity} 件，请确认后执行。"
+            previous = data.get("previous_quantity") if isinstance(data, dict) else None
+            change = f"从 {previous} 件改为 {quantity} 件" if previous is not None else f"改为 {quantity} 件"
+            return f"准备将「{product_name}」的购物车数量{change}，确认后才会修改。"
         if outcome == "success":
             return f"已将「{product_name}」的数量修改为 {quantity} 件。"
-        return f"修改购物车数量没有成功：{execution_output.get('error', '业务系统返回错误')}。"
+        return customer_error_reply(execution_output.get("error"))
     if name == "update_cart_items":
         quantity = arguments.get("quantity")
+        if execution_output.get("unchanged"):
+            return f"这些商品在购物车中已经都是 {quantity} 件，无需重复修改。"
         items = arguments.get("items") or []
         if outcome == "confirmation_required":
             return f"已准备把购物车中 {len(items)} 个商品的数量都改为 {quantity} 件，请点击确认按钮，或直接回复“确认”。"
         if outcome == "success":
             return f"购物车中 {len(items)} 个商品的数量已修改为 {quantity} 件。"
-        return f"批量修改购物车数量没有成功：{execution_output.get('error', '业务系统返回错误')}。"
+        return customer_error_reply(execution_output.get("error"))
     if name == "cancel_order":
         data = execution_output.get("data")
         order_no = data.get("orderNo") if isinstance(data, dict) else None
         order_label = order_no or state.last_order_no or "当前订单"
         if outcome == "confirmation_required":
-            return f"已准备取消订单 {order_label}，请确认后执行。"
+            return confirmation_reply(f"取消订单 {order_label}")
         if outcome == "success":
             return f"订单 {order_label} 已成功取消。"
-        return f"取消订单没有成功：{execution_output.get('error', '业务系统返回错误')}。"
+        return customer_error_reply(execution_output.get("error"))
     if name == "clear_cart":
         if outcome == "confirmation_required":
-            return "已准备清空购物车，请点击确认按钮，或直接回复“确认”以执行。"
+            return confirmation_reply("清空购物车")
         if outcome == "success":
             return "购物车已清空。"
-        return f"清空购物车没有成功：{execution_output.get('error', '业务系统返回错误')}。"
+        return customer_error_reply(execution_output.get("error"))
     if outcome == "success":
         return "操作已完成。"
-    return execution_output.get("error") or "操作没有成功。"
+    return customer_error_reply(execution_output.get("error"))
 
 
 def _customer_order_list_answer(data: Any) -> str:
     """订单列表使用受控文案，避免模型主动承诺未开放的支付或退款能力。"""
     order_count = len(data) if isinstance(data, list) else 0
-    count_text = f"共 {order_count} 笔" if order_count else ""
-    return f"已查询到你的订单{count_text}。你可以查看订单详情；待支付订单还可以取消。"
+    if not order_count:
+        return "您目前还没有订单，可以先挑选商品加入购物车。"
+    return f"查到您的订单，共 {order_count} 笔。您可以查看订单详情；待支付订单还可以取消。"
 
 
 def _missing_tool_retry_message(message: str) -> str:
@@ -677,7 +726,7 @@ def _infer_from_state(
             if req_param == param:
                 value = None
                 if source == "state.last_order_id":
-                    value = state.last_order_id
+                    value = state.resolve_order_id(message, None) if message else state.last_order_id
                 elif source == "state.last_product_id":
                     value = state.resolve_product_id(message, None) if message else state.last_product_id
                 elif source == "message.quantity":
@@ -706,30 +755,8 @@ def _generate_clarification(
     return f"请同时提供：{'、'.join(label_parts)}。"
 
 
-_CHINESE_NUMBERS = {
-    "一": 1,
-    "二": 2,
-    "两": 2,
-    "三": 3,
-    "四": 4,
-    "五": 5,
-    "六": 6,
-    "七": 7,
-    "八": 8,
-    "九": 9,
-    "十": 10,
-}
-
-
 def _extract_quantity(message: str) -> int | None:
-    arabic_match = re.search(r"(\d{1,2})\s*(?:台|个|件|部|只|双|份|条|款)", message)
-    if arabic_match:
-        value = int(arabic_match.group(1))
-        return value if value > 0 else None
-    chinese_match = re.search(r"([一二两三四五六七八九十])\s*(?:台|个|件|部|只|双|份|条|款)", message)
-    if chinese_match:
-        return _CHINESE_NUMBERS.get(chinese_match.group(1))
-    return None
+    return extract_quantity(message)
 
 
 def _detect_reference(
@@ -806,6 +833,7 @@ class AgentService:
         memory: ConversationMemoryStore | None = None,
         state_store: ConversationStateStore | None = None,
         confirmed_action_executor: Any | None = None,
+        approval_workflow: Any | None = None,
         fallback_model_client: Any | None = None,
         fallback_model: str | None = None,
         llm_circuit_breaker: AsyncCircuitBreaker | None = None,
@@ -820,6 +848,7 @@ class AgentService:
         self._memory = memory
         self._state_store = state_store
         self._confirmed_action_executor = confirmed_action_executor
+        self._approval_workflow = approval_workflow
 
     async def _create_model_response(
         self,
@@ -928,6 +957,8 @@ class AgentService:
         access_token: str | None,
     ) -> ChatResponse:
         _llm_trace_context.set([])
+        if requests_refund(message) and not denies_mutation(message):
+            return ChatResponse(answer=REFUND_UNAVAILABLE)
         if is_suspicious_instruction(message):
             return ChatResponse(
                 answer="该请求包含可能绕过安全规则或获取敏感信息的指令，已被拒绝。"
@@ -972,6 +1003,22 @@ class AgentService:
         pre_chat_product_keyword = state.last_product_keyword
         forced_tool_retry = False
 
+        if message.strip() in {'取消这次操作', '放弃这次操作', '不改了', '不要改了', '不执行', '放弃', '算了'} and state.pending_confirmation_token:
+            abandoned_action = state.pending_confirmation_action or ''
+            try:
+                pending = await self._registry.consume_confirmation(state.pending_confirmation_token, session_id, access_token)
+                operations = getattr(self._registry, "operations", None)
+                if operations:
+                    await operations.transition(pending.token, {"accepted"}, "cancelled", {"status": "cancelled", "message": abandoned_action_reply(abandoned_action)})
+                if self._approval_workflow is not None:
+                    await self._approval_workflow.resume(pending.token, False, action=pending.action, arguments=pending.arguments)
+            except EcommerceApiError:
+                pass
+            state.clear_confirmation()
+            if self._state_store is not None:
+                await self._state_store.save(session_id, access_token, state)
+            return ChatResponse(answer=abandoned_action_reply(abandoned_action))
+
         if (
             _is_confirmation_message(message)
             and state.pending_confirmation_token
@@ -980,12 +1027,17 @@ class AgentService:
             and self._confirmed_action_executor is not None
         ):
             try:
+                pending = await self._registry.consume_confirmation(state.pending_confirmation_token, session_id, access_token)
+                if self._approval_workflow is not None:
+                    await self._approval_workflow.resume(pending.token, True, action=pending.action, arguments=pending.arguments)
                 data, answer = await self._confirmed_action_executor(
-                    state.pending_confirmation_action,
-                    state.pending_confirmation_arguments,
+                    pending.action,
+                    pending.arguments,
                     access_token,
                     session_id,
                 )
+                if pending.action == "remove_from_cart" and isinstance(data, list):
+                    state.record_cart_items(data)
                 state.clear_confirmation()
                 if self._memory is not None:
                     await self._memory.append_turn(session_id, access_token, message, answer)
@@ -997,8 +1049,20 @@ class AgentService:
                 state.clear_confirmation()
                 if self._state_store is not None:
                     await self._state_store.save(session_id, access_token, state)
-                return ChatResponse(answer=f"确认执行失败：{exc}", tool_calls=[])
+                return ChatResponse(answer=customer_error_reply(str(exc)), tool_calls=[])
 
+        if _is_confirmation_message(message):
+            return ChatResponse(answer="当前没有待确认的操作。请先说明您要修改的商品或订单。")
+        message = complete_cart_clarification(message, state)
+        if vague_cart_quantity_request(message):
+            answer = cart_clarification_reply(message, state)
+            if self._memory is not None:
+                await self._memory.append_turn(session_id, access_token, message, answer)
+            if self._state_store is not None:
+                await self._state_store.save(session_id, access_token, state)
+            return ChatResponse(answer=answer)
+        if _contains_any(message.lower(), "加入购物车", "加购物车", "放购物车", "添加购物车") and is_generic_product_reference(message) and state.resolve_product_id(message, None) is None:
+            return ChatResponse(answer="您想把哪件商品加入购物车？请告诉我商品名称，或从商品卡片操作。")
         direct_cancel_arguments = _direct_cancel_order_arguments(message, state)
         if direct_cancel_arguments is not None:
             execution = await self._registry.execute(
@@ -1091,6 +1155,40 @@ class AgentService:
                 ),
             )
 
+        # 删除直接走真实购物车工具；模型不参与执行结果判定。
+        if requests_cart_removal(message):
+            cart_result = await self._registry.execute("get_cart", {}, session_id=session_id, access_token=access_token)
+            if cart_result.outcome != "success":
+                return ChatResponse(answer=customer_error_reply(cart_result.output.get("error")),
+                    tool_calls=[ToolCallRecord(name="get_cart", arguments={}, outcome=cart_result.outcome)])
+            current_items = cart_result.output.get("data")
+            if not isinstance(current_items, list):
+                return ChatResponse(answer="暂时没能读取购物车，请稍后重试；商品尚未移除。")
+            state.record_cart_items(current_items)
+            cart_id = state.resolve_cart_id(message, None)
+            if cart_id is None:
+                if self._state_store is not None:
+                    await self._state_store.save(session_id, access_token, state)
+                return ChatResponse(answer="您想移除购物车中的哪件商品？请提供商品名称，或点击对应卡片的移除按钮。"
+                    if current_items else "购物车目前是空的，没有需要移除的商品。", data=current_items,
+                    tool_calls=[ToolCallRecord(name="get_cart", arguments={}, outcome="success")])
+            arguments = {"cart_id": cart_id}
+            execution = await self._registry.execute("remove_from_cart", arguments, session_id=session_id, access_token=access_token)
+            if execution.confirmation is not None:
+                state.remember_confirmation(execution.confirmation.token, execution.confirmation.action, execution.confirmation.arguments)
+            if execution.outcome == "success":
+                update_state_from_tool(state, "remove_from_cart", arguments, execution.output)
+            answer = _answer_for_direct_tool("remove_from_cart", arguments, execution.output, execution.outcome, state)
+            if self._memory is not None:
+                await self._memory.append_turn(session_id, access_token, message, answer)
+            if self._state_store is not None:
+                state.turn_count += 1
+                await self._state_store.save(session_id, access_token, state)
+            return ChatResponse(answer=answer,
+                tool_calls=[ToolCallRecord(name="remove_from_cart", arguments=arguments, outcome=execution.outcome,
+                    result_message=execution.output.get("error") if execution.outcome == "error" else None)],
+                confirmation=execution.confirmation, data=execution.output.get("data"))
+
         direct_add_arguments = _direct_add_to_cart_arguments(message, state)
         if direct_add_arguments is not None:
             execution = await self._registry.execute(
@@ -1133,25 +1231,26 @@ class AgentService:
                 ),
             )
 
-        direct_update_arguments = _direct_update_cart_arguments(message, state)
+        # 批量操作使用当前业务数据，不能依赖上一轮购物车快照。
+        if requests_cart_quantity_change(message) and (requests_all_cart_quantity_change(message) or re.search(r"增加|减少|减掉", message)):
+            cart_result = await self._registry.execute("get_cart", {}, session_id=session_id, access_token=access_token)
+            if cart_result.outcome != "success":
+                return ChatResponse(answer=customer_error_reply(cart_result.output.get("error")),
+                    tool_calls=[ToolCallRecord(name="get_cart", arguments={}, outcome=cart_result.outcome)])
+            current_items = cart_result.output.get("data")
+            if not isinstance(current_items, list):
+                return ChatResponse(answer="暂时没能获取购物车商品，请稍后重试。")
+            state.record_cart_items(current_items)
+            if not current_items:
+                if self._state_store is not None:
+                    await self._state_store.save(session_id, access_token, state)
+                return ChatResponse(answer="您的购物车目前是空的，没有需要修改数量的商品。", data=[])
+        try:
+            direct_update_arguments = _direct_update_cart_arguments(message, state)
+        except ValueError as exc:
+            return ChatResponse(answer=str(exc))
         if direct_update_arguments is not None:
             direct_update_name = "update_cart_items" if "items" in direct_update_arguments else "update_cart"
-            if direct_update_name == "update_cart":
-                current_quantity = state.cart_quantity_for_id(direct_update_arguments["cart_id"])
-                same_quantity = current_quantity == direct_update_arguments["quantity"]
-            else:
-                same_quantity = all(
-                    state.cart_quantity_for_id(item["cart_id"]) == item["quantity"]
-                    for item in direct_update_arguments["items"]
-                )
-            if same_quantity:
-                answer = f"购物车里相关商品当前已经是 {direct_update_arguments['quantity']} 件，不需要重复修改。"
-                if self._memory is not None:
-                    await self._memory.append_turn(session_id, access_token, message, answer)
-                if self._state_store is not None:
-                    state.turn_count += 1
-                    await self._state_store.save(session_id, access_token, state)
-                return ChatResponse(answer=answer, tool_calls=[], data=None)
             execution = await self._registry.execute(
                 direct_update_name,
                 direct_update_arguments,
@@ -1167,6 +1266,8 @@ class AgentService:
                     execution.confirmation.action,
                     execution.confirmation.arguments,
                 )
+            if execution.outcome == "success":
+                update_state_from_tool(state, direct_update_name, direct_update_arguments, execution_output)
             answer = _answer_for_direct_tool(
                 direct_update_name,
                 direct_update_arguments,
@@ -1191,6 +1292,14 @@ class AgentService:
                 confirmation=execution.confirmation,
                 data=execution_output.get("data"),
             )
+
+        if requests_cart_quantity_change(message):
+            answer = cart_clarification_reply(message, state)
+            if self._memory is not None:
+                await self._memory.append_turn(session_id, access_token, message, answer)
+            if self._state_store is not None:
+                await self._state_store.save(session_id, access_token, state)
+            return ChatResponse(answer=answer)
 
         for _ in range(self._max_tool_rounds):
             try:
@@ -1217,8 +1326,35 @@ class AgentService:
                     )
                     continue
                 answer = response.output_text or "我无法生成回复。"
+                if records and records[-1].outcome in {"error", "clarification_needed"}:
+                    answer = customer_error_reply(records[-1].result_message)
+                elif pending_confirmation is not None:
+                    answer = confirmation_reply(pending_confirmation.description)
+                elif records and records[-1].name in {"add_to_cart", "update_cart", "update_cart_items", "remove_from_cart"} and records[-1].outcome == "success":
+                    answer = _answer_for_direct_tool(records[-1].name, records[-1].arguments, execution_output, "success", state)
+                elif records and records[-1].name == "get_product_detail" and records[-1].outcome == "success":
+                    product = execution_output.get("data")
+                    if isinstance(product, dict):
+                        answer = f"商品详情：{product.get('name') or '商品名称待确认'}。"
+                        if product.get("price") is not None:
+                            answer += f"价格 ¥{product['price']}。"
+                        if product.get("stock") is not None:
+                            answer += f"库存 {product['stock']} 件。"
+
+
+                if records and records[-1].outcome == "success" and pending_confirmation is None:
+                    verified_data = execution_output.get("data")
+                    if records[-1].name == "search_products":
+                        count = len(_normalize_products(verified_data))
+                        answer = (f"已查询到 {count} 项商品，请查看商品卡片中的价格和库存。"
+                                  if count else "暂时没有找到符合条件的商品，您可以调整关键词或筛选条件再试试。")
+                    elif records[-1].name == "get_cart":
+                        count = len(verified_data) if isinstance(verified_data, list) else 0
+                        answer = f"购物车中有 {count} 项商品。" if count else "您的购物车目前是空的。"
+                    elif records[-1].name == "get_order_detail" and isinstance(verified_data, dict):
+                        answer = f"已查询订单 {verified_data.get('orderNo') or records[-1].arguments.get('order_id')} 的详情，请查看订单卡片。"
                 if forced_tool_retry and _should_retry_for_missing_tool_call(message, records):
-                    answer = "我需要先查询业务系统，才能回答商品、价格、库存、购物车或订单相关问题。请换个更明确的问法再试一次。"
+                    answer = "这次没能获取到相关信息，请稍后重试。"
                 if (
                     records
                     and records[-1].name == "get_my_orders"
@@ -1353,6 +1489,15 @@ class AgentService:
                         "output": json.dumps(execution_output, ensure_ascii=False),
                     }
                 )
+                if execution_output.get("result_unknown"):
+                    # 结果待核实立即结束本轮，防止模型再次调用写工具。
+                    answer = customer_error_reply(execution_output.get("error"))
+                    if self._memory is not None:
+                        await self._memory.append_turn(session_id, access_token, message, answer)
+                    if self._state_store is not None:
+                        state.turn_count += 1
+                        await self._state_store.save(session_id, access_token, state)
+                    return ChatResponse(answer=answer, tool_calls=records, data=last_data)
 
         answer = "该请求需要过多的工具调用步骤，请尝试更简单的请求。"
         if self._memory is not None:

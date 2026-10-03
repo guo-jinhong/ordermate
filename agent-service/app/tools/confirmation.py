@@ -19,7 +19,7 @@ class PendingAction:
 
 
 class ConfirmationStore:
-    def __init__(self, ttl_seconds: int = 60) -> None:
+    def __init__(self, ttl_seconds: int = 180) -> None:
         self._ttl = timedelta(seconds=ttl_seconds)
         self._pending: dict[str, PendingAction] = {}
         self._lock = asyncio.Lock()

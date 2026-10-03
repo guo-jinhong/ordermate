@@ -22,11 +22,36 @@ def test_order_list_answer_only_mentions_supported_customer_actions():
     assert "完成支付" not in answer
 
 
+def test_empty_order_list_does_not_claim_orders_found():
+    answer = _customer_order_list_answer([])
+    assert "还没有订单" in answer
+    assert "查看订单详情" not in answer
+
+
+@pytest.mark.asyncio
+async def test_empty_product_search_overrides_model_success_copy():
+    class EmptyRegistry:
+        async def execute(self, name, arguments, **kwargs):
+            return SimpleNamespace(output={"ok": True, "data": []}, outcome="success", confirmation=None)
+
+    responses = FakeResponses([
+        SimpleNamespace(output=[SimpleNamespace(type="function_call", name="search_products",
+            arguments=json.dumps({"keyword": "耳机"}), call_id="empty")], output_text=""),
+        SimpleNamespace(output=[], output_text="找到商品了，请查看商品卡片。"),
+    ])
+    agent = AgentService(SimpleNamespace(responses=responses), EmptyRegistry(), model="test")
+    result = await agent.chat("推荐耳机", session_id="empty-search", access_token=None)
+    assert "没有找到符合条件" in result.answer
+    assert "查看商品卡片" not in result.answer
+    assert result.data == []
+
+
 class FakeEcommerce:
     def __init__(self) -> None:
         self.cancelled: list[int] = []
         self.search_keywords: list[str] = []
         self.order_status = 0
+        self.cart_quantity = 1
 
     async def search_products(
         self,
@@ -57,9 +82,13 @@ class FakeEcommerce:
                 "cartId": 88,
                 "productId": 104,
                 "productName": "OPPO Find X7",
-                "quantity": 1,
+                "quantity": self.cart_quantity,
             }
         ]
+
+    async def update_cart(self, cart_id, quantity, access_token):
+        assert cart_id == 88
+        self.cart_quantity = quantity
 
 
 class FakeResponses:
@@ -276,7 +305,7 @@ async def test_business_query_retries_when_model_skips_tool_call():
         access_token=None,
     )
 
-    assert result.answer == "Smartphone X is 2999."
+    assert result.answer == "已查询到 1 项商品，请查看商品卡片中的价格和库存。"
     assert result.tool_calls[0].name == "search_products"
     assert result.tool_calls[0].arguments == {"keyword": "手机", "max_price": 4000}
     retry_messages = [
@@ -334,7 +363,7 @@ async def test_agent_executes_product_search():
         access_token=None,
     )
 
-    assert result.answer == "I found a budget phone for 2999."
+    assert result.answer == "已查询到 1 项商品，请查看商品卡片中的价格和库存。"
     assert result.tool_calls[0].name == "search_products"
     assert result.tool_calls[0].outcome == "success"
     tool_output = responses.requests[1]["input"][-1]
@@ -372,7 +401,7 @@ async def test_product_search_guard_allows_power_bank_price_query():
         access_token=None,
     )
 
-    assert result.answer == "找到一款充电宝。"
+    assert result.answer == "已查询到 1 项商品，请查看商品卡片中的价格和库存。"
     assert result.tool_calls[0].outcome == "success"
 
 
@@ -494,7 +523,8 @@ async def test_direct_add_to_cart_when_model_would_skip_tool_call():
         access_token="jwt",
     )
 
-    assert result.answer == "已将「小米 Redmi 13C」加入购物车，共 1 件。"
+    assert "本次加入 1 件" in result.answer
+    assert "购物车总数量暂时无法更新" in result.answer
     assert result.reference is not None
     assert result.reference.value == "126"
     assert result.tool_calls[0].arguments == {"product_id": 126, "quantity": 1}
@@ -549,15 +579,17 @@ async def test_natural_language_confirmation_executes_pending_cart_update():
 
     state_store = ConversationStateStore(ttl_seconds=60)
     state = await state_store.get("ctx-confirm-cart", "jwt")
+    confirmations = ConfirmationStore()
+    pending = await confirmations.issue("ctx-confirm-cart", "update_cart", {"cart_id": 88, "quantity": 2}, fingerprint_access_token("jwt"))
     state.remember_confirmation(
-        "token",
+        pending.token,
         "update_cart",
         {"cart_id": 88, "quantity": 2},
     )
     await state_store.save("ctx-confirm-cart", "jwt", state)
     agent = AgentService(
         SimpleNamespace(responses=FakeResponses([])),
-        ContextAwareFakeToolRegistry(),
+        ToolRegistry(FakeEcommerce(), confirmations),
         model="test-model",
         state_store=state_store,
         confirmed_action_executor=executor,
@@ -586,7 +618,12 @@ async def test_update_cart_same_quantity_does_not_require_confirmation():
         ]
     )
     await state_store.save("ctx-same-qty", "jwt", state)
-    registry = ContextAwareFakeToolRegistry()
+    class SameQuantityEcommerce(FakeEcommerce):
+        async def get_cart(self, access_token):
+            items = await super().get_cart(access_token)
+            items[0]["quantity"] = 2
+            return items
+    registry = ToolRegistry(SameQuantityEcommerce(), ConfirmationStore())
     agent = AgentService(
         SimpleNamespace(responses=FakeResponses([])),
         registry,
@@ -602,8 +639,8 @@ async def test_update_cart_same_quantity_does_not_require_confirmation():
 
     assert "已经是 2 件" in result.answer
     assert result.confirmation is None
-    assert result.tool_calls == []
-    assert registry.calls == []
+    assert result.tool_calls[0].outcome == "success"
+    assert result.tool_calls[0].arguments == {"cart_id": 88, "quantity": 2}
 
 
 @pytest.mark.asyncio
@@ -629,7 +666,12 @@ async def test_update_all_cart_items_to_same_quantity():
         ]
     )
     await state_store.save("ctx-batch-qty", "jwt", state)
-    registry = ContextAwareFakeToolRegistry()
+    class CurrentCartRegistry(ContextAwareFakeToolRegistry):
+        async def execute(self, name, arguments, **kwargs):
+            if name == "get_cart":
+                return SimpleNamespace(output={"ok": True, "data": list(state.cart_items)}, outcome="success", confirmation=None)
+            return await super().execute(name, arguments, **kwargs)
+    registry = CurrentCartRegistry()
     agent = AgentService(
         SimpleNamespace(responses=FakeResponses([])),
         registry,
@@ -707,7 +749,7 @@ async def test_cancel_tool_only_creates_confirmation():
 
 
 @pytest.mark.asyncio
-async def test_cart_confirmation_uses_product_name_instead_of_cart_id():
+async def test_cart_update_receipt_uses_product_name_instead_of_cart_id():
     registry = ToolRegistry(FakeEcommerce(), ConfirmationStore())
 
     result = await registry.execute(
@@ -717,11 +759,12 @@ async def test_cart_confirmation_uses_product_name_instead_of_cart_id():
         access_token="jwt",
     )
 
-    assert result.outcome == "confirmation_required"
-    assert result.confirmation is not None
-    assert result.confirmation.arguments["product_name"] == "OPPO Find X7"
-    assert "OPPO Find X7" in result.confirmation.description
-    assert "#88" not in result.confirmation.description
+    assert result.outcome == "success"
+    assert result.confirmation is None
+    assert "OPPO Find X7" in result.output["message"]
+    assert "#88" not in result.output["message"]
+    assert result.output["data"][0]["quantity"] == 2
+
 
 
 @pytest.mark.asyncio
@@ -752,7 +795,8 @@ async def test_registry_returns_friendly_argument_error():
     )
 
     assert result.outcome == "error"
-    assert "工具参数 keyword 必须是文本" in result.output["error"]
+    assert "本次未操作" in result.output["error"]
+    assert "工具参数" not in result.output["error"]
 
 
 @pytest.mark.asyncio
@@ -1168,7 +1212,7 @@ async def test_clarification_for_cart_operations():
 
 
 @pytest.mark.asyncio
-async def test_retry_on_timeout():
+async def test_registry_does_not_retry_timeout():
     from app.tools.registry import ToolRegistry
     from app.tools.confirmation import ConfirmationStore
     from app.clients.ecommerce_client import EcommerceApiError
@@ -1183,8 +1227,8 @@ async def test_retry_on_timeout():
         access_token=None,
     )
 
-    assert result.outcome == "success"
-    assert flaky.call_count == 3  # 1 initial + 2 retries
+    assert result.outcome == "error"
+    assert flaky.call_count == 1  # HTTP 客户端负责重试，工具层只执行一次
 
 
 @pytest.mark.asyncio
@@ -1210,7 +1254,7 @@ async def test_no_retry_on_non_retryable_error():
 
 
 @pytest.mark.asyncio
-async def test_retry_eventually_fails():
+async def test_registry_fails_without_nested_retries():
     from app.tools.registry import ToolRegistry
     from app.tools.confirmation import ConfirmationStore
 
@@ -1225,7 +1269,7 @@ async def test_retry_eventually_fails():
     )
 
     assert result.outcome == "error"
-    assert flaky.call_count <= 4  # 1 + MAX_RETRIES (3)
+    assert flaky.call_count == 1
 
 
 class FlakyEcommerce:

@@ -19,7 +19,7 @@ describe('OperationResult', () => {
     })
 
     expect(wrapper.attributes('data-tone')).toBe('neutral')
-    expect(wrapper.text()).toContain('数据没有被修改')
+    expect(wrapper.text()).toContain('购物车和订单保持不变')
     expect(wrapper.text()).not.toContain('失败')
   })
 

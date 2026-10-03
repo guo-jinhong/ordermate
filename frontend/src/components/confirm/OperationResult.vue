@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { Check, Minus, X } from '@lucide/vue'
 import { computed } from 'vue'
 
 import type { ConfirmationPhase } from '../../types/chat'
 
 const props = defineProps<{
+  action?: string
   phase: ConfirmationPhase
   message: string | null
   data: unknown
@@ -11,18 +13,26 @@ const props = defineProps<{
 
 const presentation = computed(() => {
   if (props.phase === 'executed') {
-    return { title: '操作已完成', tone: 'success', fallback: '操作已经成功执行。' }
+    return { title: '操作已完成', tone: 'success', fallback: '已为您完成这次操作。' }
   }
   if (props.phase === 'cancelled') {
-    return { title: '操作已取消', tone: 'neutral', fallback: '已放弃本次操作，数据没有被修改。' }
+    const fallback = props.action === 'cancel_order' ? '本次未操作，您的订单未取消。'
+      : props.action === 'create_order' ? '本次未下单。'
+        : props.action === 'pay_order' ? '本次未支付，订单保持不变。'
+          : props.action?.includes('cart') ? '本次未操作，购物车保持不变。'
+            : '本次未操作，购物车和订单保持不变。'
+    return { title: '本次未操作', tone: 'neutral', fallback }
   }
-  return { title: '操作未完成', tone: 'error', fallback: '操作执行失败，请重新发起。' }
+  if (props.phase === 'unknown') {
+    return { title: '暂时无法确认操作结果', tone: 'neutral', fallback: '请先查看购物车或订单确认结果，暂时不要重复提交。' }
+  }
+  return { title: '操作未完成', tone: 'error', fallback: '这次操作未完成，请稍后再试。' }
 })
 </script>
 
 <template>
   <section class="operation-result" :data-tone="presentation.tone">
-    <span class="mark" aria-hidden="true">{{ phase === 'executed' ? '✓' : phase === 'cancelled' ? '—' : '!' }}</span>
+    <span class="mark" aria-hidden="true"><Check v-if="phase === 'executed'" :size="17" /><Minus v-else-if="phase === 'cancelled'" :size="17" /><X v-else :size="17" /></span>
     <div>
       <strong>{{ presentation.title }}</strong>
       <p>{{ message || presentation.fallback }}</p>

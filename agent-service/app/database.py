@@ -122,6 +122,8 @@ class Order(Base):
     __tablename__ = "orders"
 
     id = Column(ID_TYPE, primary_key=True, autoincrement=True)
+    idempotency_key = Column(String(128), nullable=True, unique=True)
+    request_hash = Column(String(64), nullable=True)
     order_no = Column(String(32), unique=True, nullable=False)
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     status = Column(SmallInteger, nullable=False, default=0)
@@ -244,6 +246,7 @@ def init_db() -> None:
     """初始化数据库（创建表和示例数据）"""
     _migrate_knowledge_columns()
     Base.metadata.create_all(engine)
+    _migrate_local_order_columns()
     _migrate_knowledge_indexes()
 
     # 检查是否已有数据
@@ -252,6 +255,19 @@ def init_db() -> None:
         if existing == 0:
             _seed_sample_data(session)
             logger.info("✅ 示例数据已创建")
+
+
+def _migrate_local_order_columns() -> None:
+    # 本地 SQLite 演示库的增量迁移；正式 MySQL 由 Flyway V2 管理。
+    if engine.dialect.name != "sqlite":
+        return
+    existing = {c["name"] for c in inspect(engine).get_columns("orders")}
+    with engine.begin() as conn:
+        if "idempotency_key" not in existing:
+            conn.execute(text("ALTER TABLE orders ADD COLUMN idempotency_key VARCHAR(128) NULL"))
+        if "request_hash" not in existing:
+            conn.execute(text("ALTER TABLE orders ADD COLUMN request_hash VARCHAR(64) NULL"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uk_local_order_intent ON orders(idempotency_key)"))
 
 
 def _migrate_knowledge_columns() -> None:
@@ -620,17 +636,31 @@ class EcommerceRepository:
         quantity: int,
         address_id: int = 1,
         payment_method: str = "DEMO",
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """创建订单"""
-        product = self.session.query(Product).filter(Product.id == product_id).first()
+        import hashlib, json
+        request_hash = hashlib.sha256(json.dumps([user_id, product_id, quantity, address_id, payment_method]).encode()).hexdigest()
+        if idempotency_key:
+            self.session.query(User).filter(User.id == user_id).with_for_update().first()
+            existing = self.session.query(Order).filter(Order.user_id == user_id, Order.idempotency_key == idempotency_key).first()
+            if existing:
+                if existing.request_hash != request_hash:
+                    raise ValueError("同一购买请求的订单信息不一致")
+                return self._order_to_dict(existing)
+        product = self.session.query(Product).filter(Product.id == product_id).with_for_update().first()
         if not product:
             raise ValueError(f"商品不存在: {product_id}")
 
+        if quantity < 1 or quantity > 99 or product.stock < quantity:
+            raise ValueError("本次可购买数量不足或超出限购范围")
         subtotal = product.price * quantity
         order_no = self._generate_order_no()
 
         order = Order(
             order_no=order_no,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
             user_id=user_id,
             status=0,  # 待支付
             final_amount=subtotal,
@@ -738,6 +768,30 @@ class EcommerceRepository:
             item.quantity = quantity
         self.session.commit()
         return {"id": cart_id, "quantity": quantity}
+
+    def update_cart_items(self, user_id: int, items: list[dict]) -> None:
+        """数据库直连模式也采用一次提交，任一失败整体回滚。"""
+        try:
+            if not items or len({item['cart_id'] for item in items}) != len(items):
+                raise ValueError('购物车商品不能为空或重复')
+            targets = []
+            for update in sorted(items, key=lambda item: item['cart_id']):
+                item = self.session.query(CartItem).filter(CartItem.id == update['cart_id']).with_for_update().first()
+                if item is None or item.user_id != user_id:
+                    raise ValueError('购物车商品不存在或无权修改')
+                if not 1 <= update['quantity'] <= 99:
+                    raise ValueError('商品数量必须为1到99件')
+                if update.get('previous_quantity') is not None and item.quantity != update['previous_quantity']:
+                    raise ValueError('购物车数量已发生变化，请重新确认修改')
+                if item.product.stock < update['quantity']:
+                    raise ValueError('商品库存不足，本次批量修改未执行')
+                targets.append((item, update['quantity']))
+            for item, quantity in targets:
+                item.quantity = quantity
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
 
     def remove_from_cart(self, cart_id: int) -> None:
         """删除购物车项"""

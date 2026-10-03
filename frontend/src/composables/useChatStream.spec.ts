@@ -116,7 +116,7 @@ describe('useChatStream', () => {
     wrapper.unmount()
   })
 
-  it('preserves a plain-text non-2xx error message', async () => {
+  it('shows a customer-friendly message for an upstream server error', async () => {
     streamChatMock.mockResolvedValue(
       new Response('上游服务暂不可用', {
         status: 503,
@@ -127,7 +127,7 @@ describe('useChatStream', () => {
 
     await expect(
       stream.send({ message: '重试', sessionId: 'session-1', accessToken: null, runId: 'run-1' }),
-    ).rejects.toThrow('上游服务暂不可用')
+    ).rejects.toThrow('服务暂时不可用，请稍后重试。')
     wrapper.unmount()
   })
 

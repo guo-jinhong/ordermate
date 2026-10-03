@@ -5,7 +5,9 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.approval_workflow import ApprovalWorkflow
-from app.conversation_state import ConversationState, ConversationStateStore
+from app.business_fields import extract_quantity, denies_mutation, requests_refund, requests_cart_quantity_change, requests_all_cart_quantity_change, cart_quantity_arguments, vague_cart_quantity_request, cart_clarification_reply, complete_cart_clarification, requests_cart_removal
+from app.business_feedback import cart_add_reply, REFUND_UNAVAILABLE, confirmation_reply, customer_error_reply, product_purchase_copy
+from app.conversation_state import ConversationState, ConversationStateStore, extract_entity_id
 from app.knowledge_base import knowledge_search_intent, route_knowledge_base
 from app.product_terms import extract_product_keyword
 from app.schemas import ChatResponse, ReferenceResolution, ToolCallRecord
@@ -19,16 +21,7 @@ def _extract_number_from_text(text: str) -> int | None:
 
 
 def _extract_product_id_from_text(text: str) -> int | None:
-    patterns = [
-        r"(?:商品|product)\s*#?\s*(\d+)",
-        r"(\d+)\s*号\s*(?:商品|产品)",
-        r"#\s*(\d+)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return int(match.group(1))
-    return None
+    return extract_entity_id(text, "product")
 
 
 def _extract_cart_id_from_text(text: str) -> int | None:
@@ -41,8 +34,7 @@ def _resolve_or_clarify_order_id(
     lowered: str,
     state: ConversationState,
 ) -> tuple[int | None, ChatResponse | None]:
-    explicit_id = _extract_number_from_text(lowered)
-    order_id = state.resolve_order_id(message, explicit_id)
+    order_id = state.resolve_order_id(message, None)
     if order_id is None:
         return None, ChatResponse(answer="请告诉我需要操作的订单号，或先查看订单列表。")
     return order_id, None
@@ -92,6 +84,10 @@ class DemoAgentService:
         session_id: str,
         access_token: str | None,
     ) -> ChatResponse:
+        if denies_mutation(message):
+            return ChatResponse(answer="本轮包含否定操作的要求，未执行修改。请明确要执行的操作。")
+        if requests_refund(message) and not denies_mutation(message):
+            return ChatResponse(answer=REFUND_UNAVAILABLE)
         if is_suspicious_instruction(message):
             return ChatResponse(
                 answer="该请求包含可能绕过安全规则或获取敏感信息的指令，已被拒绝。"
@@ -103,10 +99,15 @@ class DemoAgentService:
             else ConversationState()
         )
 
+        message = complete_cart_clarification(message, state)
         normalized = message.strip()
         lowered = normalized.lower()
 
         response = await self._route(message, lowered, state, session_id, access_token)
+        if (response.tool_calls and response.tool_calls[-1].outcome == "success"
+                and response.tool_calls[-1].name in {"update_cart", "update_cart_items", "remove_from_cart"}
+                and isinstance(response.data, list)):
+            state.record_cart_items(response.data)
 
         if self._state_store is not None:
             await self._state_store.save(session_id, access_token, state)
@@ -121,6 +122,8 @@ class DemoAgentService:
         session_id: str,
         access_token: str | None,
     ) -> ChatResponse:
+        if vague_cart_quantity_request(message):
+            return ChatResponse(answer=cart_clarification_reply(message, state))
         if self._contains_any(lowered, "你能做什么", "你会什么", "有哪些功能", "帮助", "help"):
             state.turn_count += 1
             return ChatResponse(answer=self._format_capabilities())
@@ -135,7 +138,7 @@ class DemoAgentService:
                 {"query": message, "kb": route_knowledge_base(message)},
                 session_id=session_id,
                 access_token=access_token,
-                success_prefix="我从项目知识库中检索到以下说明：",
+                success_prefix="查到的相关说明如下：",
             )
             state.record_knowledge_topic(topic)
             return result
@@ -150,11 +153,11 @@ class DemoAgentService:
                 {"order_id": order_id},
                 session_id=session_id,
                 access_token=access_token,
-                success_prefix="已准备支付订单，执行前需要你的明确确认。",
+                success_prefix="已准备支付订单，处理前需要您的确认。",
                 reference=ref,
             )
 
-        if self._contains_any(lowered, "下单", "购买", "买", "创建订单", "place order"):
+        if self._contains_any(lowered, "下单", "购买", "买", "创建订单", "再来一单", "place order", "buy again", "order again"):
             quantity = self._extract_quantity(lowered)
             product_id, clarification = _resolve_or_clarify_product_id(message, lowered, state)
             if clarification:
@@ -165,10 +168,9 @@ class DemoAgentService:
                     )
                     products = self._normalize_products(search.data)
                     if products:
-                        product_id = int(products[0]["id"])
-                        state.record_product(
-                            product_id, str(products[0].get("name") or "")
-                        )
+                        product_id = state.find_product_id_by_message(message)
+                        if product_id is not None:
+                            state.record_product(product_id)
                 if product_id is None:
                     return clarification
             ref = ReferenceResolution(type="product", value=str(product_id)) if _extract_product_id_from_text(lowered) is None else None
@@ -177,7 +179,7 @@ class DemoAgentService:
                 {"product_id": product_id, "quantity": quantity},
                 session_id=session_id,
                 access_token=access_token,
-                success_prefix="已准备创建订单，执行前需要你的确认。",
+                success_prefix="已准备创建订单，处理前需要您的确认。",
                 reference=ref,
             )
 
@@ -195,7 +197,7 @@ class DemoAgentService:
                 {"order_id": order_id},
                 session_id=session_id,
                 access_token=access_token,
-                success_prefix="已准备取消订单，但执行前仍需要你的明确确认。",
+                success_prefix="已准备取消订单，但执行前仍需要您的确认。",
                 reference=ref,
             )
             if result.tool_calls and result.tool_calls[0].outcome in {
@@ -212,17 +214,17 @@ class DemoAgentService:
                 {},
                 session_id=session_id,
                 access_token=access_token,
-                success_prefix="已准备清空购物车，执行前需要你的明确确认。",
+                success_prefix="已准备清空购物车，处理前需要您的确认。",
             )
 
-        if self._contains_any(
-            lowered,
-            "删除购物车",
-            "移除购物车",
-            "购物车移除",
-            "删掉购物车",
-            "remove cart",
-        ):
+        if requests_cart_removal(message):
+            cart_result = await self._registry.execute("get_cart", {}, session_id=session_id, access_token=access_token)
+            if cart_result.outcome != "success":
+                return self._response_for_result("get_cart", {}, cart_result)
+            current_items = cart_result.output.get("data")
+            if not isinstance(current_items, list):
+                return ChatResponse(answer="暂时没能读取购物车，请稍后重试；商品尚未移除。")
+            state.record_cart_items(current_items)
             cart_id, clarification = _resolve_or_clarify_cart_id(message, lowered, state)
             if clarification:
                 return clarification
@@ -232,22 +234,29 @@ class DemoAgentService:
                 {"cart_id": cart_id},
                 session_id=session_id,
                 access_token=access_token,
-                success_prefix="已准备删除购物车商品，执行前需要你的明确确认。",
+                success_prefix="已准备删除购物车商品，处理前需要您的确认。",
             )
 
-        if self._contains_any(lowered, "修改购物车", "购物车数量", "改数量", "update cart"):
-            cart_id, clarification = _resolve_or_clarify_cart_id(message, lowered, state)
-            if clarification:
-                return clarification
-            quantity = self._extract_quantity(lowered)
-            state.record_cart_view()
-            return await self._run_tool(
-                "update_cart",
-                {"cart_id": cart_id, "quantity": quantity},
-                session_id=session_id,
-                access_token=access_token,
-                success_prefix="已准备修改购物车数量，执行前需要你的明确确认。",
-            )
+        if requests_cart_quantity_change(message):
+            if requests_all_cart_quantity_change(message) or re.search(r"增加|减少|减掉", message):
+                cart_result = await self._registry.execute("get_cart", {}, session_id=session_id, access_token=access_token)
+                if cart_result.outcome != "success":
+                    return self._response_for_result("get_cart", {}, cart_result)
+                current_items = cart_result.output.get("data")
+                if not isinstance(current_items, list):
+                    return ChatResponse(answer="暂时没能获取购物车商品，请稍后重试。")
+                state.record_cart_items(current_items)
+                if not current_items:
+                    return ChatResponse(answer="您的购物车目前是空的，没有需要修改数量的商品。", data=[])
+            try:
+                arguments = cart_quantity_arguments(message, state)
+            except ValueError as exc:
+                return ChatResponse(answer=str(exc))
+            if arguments is None:
+                return ChatResponse(answer=cart_clarification_reply(message, state))
+            name = "update_cart_items" if "items" in arguments else "update_cart"
+            return await self._run_tool(name, arguments, session_id=session_id, access_token=access_token,
+                success_prefix="购物车数量已修改。")
 
         if self._contains_any(lowered, "加入购物车", "加购物车", "放购物车", "添加购物车", "add to cart"):
             if not access_token:
@@ -268,10 +277,9 @@ class DemoAgentService:
                     )
                     products = self._normalize_products(search.data)
                     if products:
-                        product_id = int(products[0]["id"])
-                        state.record_product(
-                            product_id, str(products[0].get("name") or "")
-                        )
+                        product_id = state.find_product_id_by_message(message)
+                        if product_id is not None:
+                            state.record_product(product_id)
                 if product_id is None:
                     return clarification
             product_name = state.product_name_for_id(product_id) or "该商品"
@@ -293,7 +301,7 @@ class DemoAgentService:
                 {},
                 session_id=session_id,
                 access_token=access_token,
-                success_prefix="这是你当前的购物车：",
+                success_prefix="这是您当前的购物车：",
             )
             if result.tool_calls and result.tool_calls[0].outcome == "success":
                 items = result.data if isinstance(result.data, list) else []
@@ -303,7 +311,7 @@ class DemoAgentService:
             return result
 
         if self._contains_any(lowered, "订单", "order", "查一下订单", "看看订单"):
-            explicit_id = self._extract_number(lowered)
+            explicit_id = extract_entity_id(message, "order")
             order_id = state.resolve_order_id(message, explicit_id)
             if order_id is not None:
                 tool_name = "get_order_detail"
@@ -317,7 +325,7 @@ class DemoAgentService:
             else:
                 tool_name = "get_my_orders"
                 arguments = {}
-                success_prefix = "你的订单列表如下："
+                success_prefix = "您的订单列表如下："
                 ref = None
 
             result = await self._registry.execute(
@@ -329,22 +337,28 @@ class DemoAgentService:
 
             if result.outcome == "success" and tool_name == "get_my_orders":
                 orders = self._normalize_list(result.output.get("data"))
+                if not orders:
+                    state.record_order(None, selected=False)
                 if orders:
                     first_order = orders[0]
                     first_id = first_order.get("id")
                     first_no = first_order.get("orderNo")
                     if first_id is not None:
-                        state.record_order(first_id, first_no)
+                        state.record_order(first_id, first_no, selected=len(orders) == 1)
 
             if result.outcome in {"success", "confirmation_required"} and order_id is not None:
-                state.record_order(order_id)
+                order_data = result.output.get("data")
+                order_no = order_data.get("orderNo") if isinstance(order_data, dict) else None
+                state.record_order(order_id, order_no)
 
             if result.outcome == "confirmation_required":
                 answer = success_prefix
             elif result.outcome == "success":
-                answer = f"{success_prefix}\n{self._format_data(result.output.get('data'))}"
+                answer = ("您目前还没有订单，可以先挑选商品加入购物车。"
+                          if tool_name == "get_my_orders" and not result.output.get("data")
+                          else f"{success_prefix}\n{self._format_data(result.output.get('data'))}")
             else:
-                answer = result.output.get("error", "工具执行失败。")
+                answer = customer_error_reply(result.output.get("error"))
 
             return ChatResponse(
                 answer=answer,
@@ -411,7 +425,7 @@ class DemoAgentService:
                 if force_full_product_scan or allows_generic_filtered_search:
                     keyword = ""
                 else:
-                    return ChatResponse(answer="请告诉我你想搜索什么商品。")
+                    return ChatResponse(answer="请告诉我您想搜索什么商品。")
 
             return await self._search_products(
                 keyword, lowered, state, session_id, access_token,
@@ -459,7 +473,7 @@ class DemoAgentService:
                     {"order_id": state.last_order_id},
                     session_id=session_id,
                     access_token=access_token,
-                    success_prefix="已准备取消订单，但执行前仍需要你的明确确认。",
+                    success_prefix="已准备取消订单，但执行前仍需要您的确认。",
                     reference=order_ref,
                 )
                 state.record_order(state.last_order_id)
@@ -519,13 +533,28 @@ class DemoAgentService:
             )
         if result.outcome == "confirmation_required":
             description = result.confirmation.description if result.confirmation is not None else success_prefix
-            answer = f"已准备：{description}。请确认后执行。"
+            answer = confirmation_reply(description)
         elif result.outcome == "success":
             data = result.output.get("data")
             mutation_tools = {"add_to_cart", "update_cart", "remove_from_cart", "clear_cart"}
             answer = success_prefix if data is None or name in mutation_tools else f"{success_prefix}\n{self._format_data(data)}"
+            if name == "get_cart" and data == []:
+                answer = "您的购物车目前是空的，可以先挑选商品加入购物车。"
+            if name == "add_to_cart":
+                answer = cart_add_reply(arguments, result.output)
+                if self._state_store is not None and isinstance(result.output.get("cart_snapshot"), list):
+                    state = await self._state_store.get(session_id, access_token)
+                    state.record_cart_items(result.output["cart_snapshot"])
+            elif result.output.get("message"):
+                answer = result.output["message"]
+                if self._state_store is not None and isinstance(result.output.get("cart_snapshot"), list):
+                    state = await self._state_store.get(session_id, access_token)
+                    state.record_cart_items(result.output["cart_snapshot"])
+            elif result.output.get("unchanged"):
+                answer = f"购物车中相关商品已经是 {arguments['quantity']} 件，无需重复修改。"
+
         else:
-            answer = result.output.get("error", "工具执行失败。")
+            answer = customer_error_reply(result.output.get("error"))
         return ChatResponse(
             answer=answer,
             tool_calls=[
@@ -616,7 +645,7 @@ class DemoAgentService:
     @staticmethod
     def _response_for_result(name: str, arguments: dict[str, Any], result: Any):
         return ChatResponse(
-            answer=result.output.get("error", "工具执行失败。"),
+            answer=customer_error_reply(result.output.get("error")),
             tool_calls=[
                 ToolCallRecord(name=name, arguments=arguments, outcome=result.outcome)
             ],
@@ -635,9 +664,9 @@ class DemoAgentService:
         lines = ["我找到这些商品："]
         for product in products[:10]:
             lines.append(
-                f"• {product.get('name') or '未命名商品'} — "
+                f"• {product.get('name') or '商品名称暂未显示'} — "
                 f"{DemoAgentService._format_currency(product.get('price'))}，"
-                f"库存 {product.get('stock', '未知')} 件"
+                f"{product_purchase_copy(product)}"
             )
         return "\n".join(lines)
 
@@ -647,22 +676,22 @@ class DemoAgentService:
             return "没有查到这个商品的详情。"
         return (
             "商品详情如下：\n"
-            f"• 商品：{data.get('name') or '未命名商品'}\n"
+            f"• 商品：{data.get('name') or '商品名称暂未显示'}\n"
             f"• 价格：{DemoAgentService._format_currency(data.get('price'))}\n"
-            f"• 库存：{data.get('stock', '未知')} 件\n"
+            f"• 购买提示：{product_purchase_copy(data)}\n"
             f"• 描述：{data.get('description') or '暂无描述'}"
         )
 
     @staticmethod
     def _format_capabilities() -> str:
         return (
-            "我可以帮你做这些电商客服操作：\n"
+            "我可以帮您做这些电商客服操作：\n"
             "• 匿名搜索/推荐商品，按预算、价格和常见偏好筛选。\n"
-            "• 查询商品价格、库存和详情，并理解“它/这款/刚才那个”。\n"
+            "• 查询商品价格、是否有货和详情，并理解“它/这款/刚才那个”。\n"
             "• 登录后查看购物车、加入购物车、修改数量、删除或清空购物车。\n"
             "• 登录后查询订单、查看订单详情、取消待支付订单、创建订单和支付订单。\n"
-            "• 售后、退款、规则和参数问题会检索项目知识库。\n"
-            "取消、删除、清空、下单和支付都会先让你二次确认。"
+            "• 解答售后规则、退换货政策和商品使用问题。\n"
+            "下单、支付、取消订单和清空购物车会先请您确认。"
         )
 
     @staticmethod
@@ -788,7 +817,7 @@ class DemoAgentService:
     @staticmethod
     def _format_data(data: Any) -> str:
         if data is None or data == []:
-            return "暂无数据。"
+            return "暂时没有查询到相关内容。"
         if isinstance(data, list):
             lines = []
             for item in data[:8]:
@@ -856,7 +885,7 @@ class DemoAgentService:
             2: "已发货",
             3: "已完成",
             4: "已取消",
-        }.get(status, f"未知状态({status})")
+        }.get(status, f"订单状态暂时无法获取，请稍后刷新")
 
     @staticmethod
     def _contains_any(text: str, *keywords: str) -> bool:
@@ -869,16 +898,7 @@ class DemoAgentService:
 
     @staticmethod
     def _extract_product_id(text: str) -> int | None:
-        patterns = [
-            r"(?:商品|product)\s*#?\s*(\d+)",
-            r"(\d+)\s*号\s*(?:商品|产品)",
-            r"#\s*(\d+)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                return int(match.group(1))
-        return None
+        return extract_entity_id(text, "product")
 
     @staticmethod
     def _extract_cart_id(text: str) -> int | None:
@@ -887,11 +907,8 @@ class DemoAgentService:
 
     @staticmethod
     def _extract_quantity(text: str) -> int:
-        match = re.search(r"(\d+)\s*(?:个|件|台|双|本|份|x)", text, re.IGNORECASE)
-        if match:
-            return max(int(match.group(1)), 1)
-        match = re.search(r"(?:数量|quantity|qty)\s*[:：]?\s*(\d+)", text, re.IGNORECASE)
-        return max(int(match.group(1)), 1) if match else 1
+        quantity = extract_quantity(text)
+        return quantity if quantity is not None else 1
 
     @staticmethod
     def _extract_budget(text: str) -> Decimal | None:

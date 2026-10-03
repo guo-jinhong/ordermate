@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
 import java.util.List;
 
 @Data
@@ -22,6 +23,10 @@ public class CreateOrderDTO {
     private String paymentMethod;
 
     private String remark;
+
+    // 同一购买意图的服务端幂等键，允许旧客户端不传。
+    @Pattern(regexp = "[A-Za-z0-9_-]{16,128}")
+    private String idempotencyKey;
 
     @NotEmpty(message = "Order must contain at least one item")
     @Valid

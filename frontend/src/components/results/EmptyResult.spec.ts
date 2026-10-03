@@ -20,7 +20,7 @@ describe('EmptyResult', () => {
     await wrapper.get('button').trigger('click')
 
     expect(wrapper.emitted('prompt')).toEqual([[{
-      prompt: '推荐一些有库存的商品',
+      prompt: '推荐一些有货的商品',
       label: '去搜索商品',
       authRequired: false,
     }]])

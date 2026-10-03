@@ -4,6 +4,11 @@ import { describe, expect, it } from 'vitest'
 import OrderCard from './OrderCard.vue'
 
 describe('OrderCard', () => {
+  it.each([[2, '退款处理中'], [3, '已退款']])('shows actual refund payment status %s', (paymentStatus, label) => {
+    const wrapper = mount(OrderCard, { props: { order: { id: 8, orderNo: 'ORD-8', status: 1, paymentStatus, finalAmount: 99 } } })
+    expect(wrapper.text()).toContain(label)
+    expect(wrapper.text()).not.toContain('支付状态暂时无法获取')
+  })
   it('renders a payable order and exposes the cancel action', async () => {
     const wrapper = mount(OrderCard, {
       props: {
@@ -59,7 +64,7 @@ describe('OrderCard', () => {
 
     expect(wrapper.text()).toContain('订单号待确认')
     expect(wrapper.text()).toContain('创建时间待确认')
-    expect(wrapper.text()).toContain('支付状态未知')
+    expect(wrapper.text()).toContain('支付状态暂时无法获取')
     expect(wrapper.text()).toContain('金额待确认')
     expect(wrapper.text()).not.toContain('取消订单')
   })

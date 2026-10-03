@@ -28,9 +28,9 @@ describe('App', () => {
   it('mounts the usable OrderMate workspace', () => {
     const wrapper = mount(App, { global: { plugins: [createPinia()] } })
 
-    expect(wrapper.get('h1').text()).toBe('今天想买些什么？')
+    expect(wrapper.get('h1').text()).toBe('有什么可以帮您？')
     expect(wrapper.text()).toContain('OrderMate')
-    expect(wrapper.get('textarea').attributes('placeholder')).toContain('描述你想查找')
+    expect(wrapper.get('textarea').attributes('placeholder')).toContain('描述您想查找')
     expect(wrapper.get('.skip-link').attributes('href')).toBe('#workspace')
     expect(wrapper.get('main').attributes('id')).toBe('workspace')
     wrapper.unmount()

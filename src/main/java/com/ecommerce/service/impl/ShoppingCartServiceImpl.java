@@ -2,6 +2,7 @@ package com.ecommerce.service.impl;
 
 import com.ecommerce.dto.CartItemDTO;
 import com.ecommerce.dto.AddToCartDTO;
+import com.ecommerce.dto.CartQuantityUpdateDTO;
 import com.ecommerce.entity.ShoppingCart;
 import com.ecommerce.entity.Product;
 import com.ecommerce.entity.User;
@@ -26,6 +27,31 @@ public class ShoppingCartServiceImpl implements ShoppingCartService {
     private final UserService userService;
 
     private static final int MAX_QUANTITY_PER_PRODUCT = 99;
+
+    // 全部校验后统一写入；任一失败由事务回滚，不允许部分成功。
+    @Override
+    public void updateCartItems(Long userId, List<CartQuantityUpdateDTO> items) {
+        if (items == null || items.isEmpty()) throw new BusinessException("没有需要修改的购物车商品");
+        if (items.stream().anyMatch(i -> i == null || i.getCartId() == null))
+            throw new BusinessException("购物车商品编号不能为空");
+        if (items.stream().map(CartQuantityUpdateDTO::getCartId).distinct().count() != items.size())
+            throw new BusinessException("购物车商品不能重复");
+        var sorted = items.stream().sorted(java.util.Comparator.comparing(CartQuantityUpdateDTO::getCartId)).toList();
+        var carts = new java.util.ArrayList<ShoppingCart>();
+        for (var item : sorted) {
+            var cart = shoppingCartRepository.findByIdForUpdate(item.getCartId())
+                    .orElseThrow(() -> new ResourceNotFoundException("购物车商品已不存在，请刷新后重试"));
+            if (!cart.getUser().getId().equals(userId)) throw new BusinessException(403, "无权修改这件购物车商品");
+            if (item.getQuantity() == null || item.getQuantity() < 1 || item.getQuantity() > MAX_QUANTITY_PER_PRODUCT)
+                throw new BusinessException("商品数量必须为1到99件");
+            if (item.getPreviousQuantity() != null && !item.getPreviousQuantity().equals(cart.getQuantity()))
+                throw new BusinessException("购物车数量已发生变化，请重新确认修改");
+            if (cart.getProduct().getStock() < item.getQuantity()) throw new BusinessException("商品库存不足，本次批量修改未执行");
+            carts.add(cart);
+        }
+        for (int i = 0; i < carts.size(); i++) carts.get(i).setQuantity(sorted.get(i).getQuantity());
+        shoppingCartRepository.saveAll(carts);
+    }
 
     @Override
     public void addToCart(Long userId, AddToCartDTO addToCartDTO) {

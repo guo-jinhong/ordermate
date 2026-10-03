@@ -33,6 +33,16 @@ class FlywayMigrationContainerTest {
                     "shopping_carts", "orders", "order_items", "reviews", "flyway_schema_history")
                     .collect(Collectors.toSet());
             assertThat(actual).containsAll(expected);
+            try (ResultSet columns = connection.getMetaData().getColumns(MYSQL.getDatabaseName(), null, "orders", "%")) {
+                Set<String> names = new java.util.HashSet<>();
+                while (columns.next()) names.add(columns.getString("COLUMN_NAME"));
+                assertThat(names).contains("idempotency_key", "request_hash");
+            }
+            try (ResultSet indexes = connection.getMetaData().getIndexInfo(MYSQL.getDatabaseName(), null, "orders", true, false)) {
+                Set<String> names = new java.util.HashSet<>();
+                while (indexes.next()) names.add(indexes.getString("INDEX_NAME"));
+                assertThat(names).contains("uk_order_user_intent");
+            }
         }
     }
 }

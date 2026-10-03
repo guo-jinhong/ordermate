@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { PackageSearch, ReceiptText, ShoppingCart } from '@lucide/vue'
 import { computed } from 'vue'
 
 import { emptyResultCopy } from '../../lib/labels'
@@ -10,15 +11,15 @@ const emit = defineEmits<{ prompt: [action: PromptAction] }>()
 
 const copy = computed(() => emptyResultCopy(props.kind))
 const prompts: Record<ResultKind, string> = {
-  product: '推荐一些有库存的商品',
-  cart: '推荐一些有库存的商品',
+  product: '推荐一些有货的商品',
+  cart: '推荐一些有货的商品',
   order: '推荐一些商品',
 }
 </script>
 
 <template>
   <section class="empty-result" :data-empty-kind="kind" role="status">
-    <span class="mark" aria-hidden="true">—</span>
+    <span class="mark" aria-hidden="true"><PackageSearch v-if="kind === 'product'" :size="18" /><ShoppingCart v-else-if="kind === 'cart'" :size="18" /><ReceiptText v-else :size="18" /></span>
     <div>
       <h3>{{ copy.title }}</h3>
       <p>{{ copy.description }}</p>

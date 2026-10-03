@@ -60,6 +60,10 @@ describe('resolveResultPayload', () => {
     )
   })
 
+  it('marks product details so the full description stays available', () => {
+    expect(resolveResultPayload({ id: 8, name: '商品', price: 99 }, [tool('get_product_detail')])).toMatchObject({ kind: 'product', context: { detail: true } })
+  })
+
   it('keeps product search arguments as rendering context', () => {
     const result = resolveResultPayload(
       [{ name: '手机', price: 2999 }],

@@ -114,7 +114,7 @@ async def test_rule_based_summary_extracts_entities():
 
     assert "123" in summary or "商品" in summary
     assert "789" in summary or "订单" in summary
-    assert "cancelled_order" in summary
+    assert "操作记录" not in summary
 
 
 @pytest.mark.asyncio

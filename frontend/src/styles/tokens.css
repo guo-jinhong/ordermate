@@ -1,20 +1,20 @@
 :root {
   color-scheme: light;
 
-  /* Semantic colors */
-  --color-canvas: #f4f7fb;
+  /* 第一版：轻量浅色客服界面 */
+  --color-canvas: #f8fafc;
   --color-surface: #ffffff;
-  --color-surface-subtle: #f8faff;
+  --color-surface-subtle: #f8fafc;
   --color-surface-raised: rgba(255, 255, 255, 0.92);
   --color-ink: #111827;
   --color-muted: #64748b;
   --color-subtle: #94a3b8;
-  --color-line: #dce3ee;
-  --color-line-strong: #cbd5e1;
+  --color-line: #d6dfeb;
+  --color-line-strong: #bccbdd;
 
-  --color-primary: #4f7cff;
-  --color-primary-hover: #3d69ed;
-  --color-primary-soft: #edf2ff;
+  --color-primary: #3865ee;
+  --color-primary-hover: #2c53cd;
+  --color-primary-soft: #eef3ff;
   --color-primary-ink: #173b9d;
   --color-on-primary: #ffffff;
 
@@ -38,15 +38,17 @@
   --color-on-dark-muted: #9eacc0;
   --color-backdrop: rgba(11, 18, 32, 0.56);
 
+  --content-width: 48rem;
+
   /* Typography */
   --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
     "Microsoft YaHei", sans-serif;
   --font-display: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
     "Microsoft YaHei", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --text-xs: 0.6875rem;
-  --text-sm: 0.75rem;
-  --text-base: 0.875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
   --text-lg: 1rem;
   --text-xl: 1.125rem;
   --text-2xl: clamp(1.5rem, 3vw, 2.125rem);
@@ -72,8 +74,8 @@
   --radius-lg: 1rem;
   --radius-xl: 1.25rem;
   --radius-pill: 999px;
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
-  --shadow-md: 0 10px 30px rgba(15, 23, 42, 0.1);
+  --shadow-sm: 0 2px 6px rgba(15, 23, 42, 0.025);
+  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.06);
   --shadow-lg: 0 24px 64px rgba(15, 23, 42, 0.14);
   --shadow-focus: 0 0 0 3px rgba(79, 124, 255, 0.24);
 

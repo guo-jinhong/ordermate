@@ -34,6 +34,13 @@ function validationMessage(item: unknown): string | null {
 }
 
 export function normalizeErrorDetail(payload: unknown, status?: number): string {
+  if (status != null && status >= 500) {
+    const detail = isRecord(payload) && typeof payload.detail === 'string' ? payload.detail : ''
+    if (/重复提交|重复下单/.test(detail)) {
+      return '本次操作结果暂时无法确认，请先查看购物车或订单，暂时不要重复提交。'
+    }
+    return '服务暂时不可用，请稍后重试。'
+  }
   if (isRecord(payload)) {
     if (typeof payload.detail === 'string' && payload.detail.trim()) {
       return payload.detail
@@ -51,7 +58,15 @@ export function normalizeErrorDetail(payload: unknown, status?: number): string 
     }
   }
 
-  return status == null ? '请求失败，请稍后重试。' : `请求失败（HTTP ${status}）`
+  if (status === 401) return '登录信息无效，请重新登录。'
+  if (status === 403) return '当前账号没有权限执行此操作。'
+  if (status === 429) return '操作太频繁，请稍后再试。'
+  return '请求未完成，请稍后重试。'
+}
+
+export function customerErrorMessage(error: unknown, fallback = '请求未完成，请稍后重试。'): string {
+  if (error instanceof TypeError) return '连接失败，请检查网络后重试。'
+  return error instanceof Error ? error.message : fallback
 }
 
 async function readErrorPayload(response: Response): Promise<unknown> {

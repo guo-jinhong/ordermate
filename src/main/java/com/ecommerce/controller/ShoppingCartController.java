@@ -2,6 +2,9 @@ package com.ecommerce.controller;
 
 import com.ecommerce.dto.CartItemDTO;
 import com.ecommerce.dto.AddToCartDTO;
+import com.ecommerce.dto.CartQuantityUpdateDTO;
+import jakarta.validation.constraints.NotEmpty;
+import org.springframework.validation.annotation.Validated;
 import com.ecommerce.dto.ApiResponse;
 import com.ecommerce.service.ShoppingCartService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -17,8 +20,17 @@ import java.util.List;
 @RestController
 @RequestMapping("/shopping-cart")
 @RequiredArgsConstructor
+@Validated
 public class ShoppingCartController {
     private final ShoppingCartService shoppingCartService;
+
+    @Operation(summary = "Update multiple cart quantities atomically")
+    @PutMapping("/batch")
+    public ApiResponse<Void> updateCartItems(Authentication authentication,
+            @RequestBody @NotEmpty List<@Valid CartQuantityUpdateDTO> items) {
+        shoppingCartService.updateCartItems((Long) authentication.getPrincipal(), items);
+        return ApiResponse.success(null, "Cart quantities updated successfully");
+    }
 
     @Operation(summary = "Add product to cart")
     @PostMapping("/add")

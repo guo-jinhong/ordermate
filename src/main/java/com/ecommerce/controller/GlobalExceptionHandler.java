@@ -70,10 +70,19 @@ public class GlobalExceptionHandler {
             case 401 -> HttpStatus.UNAUTHORIZED;
             case 403 -> HttpStatus.FORBIDDEN;
             case 404 -> HttpStatus.NOT_FOUND;
+            case 409 -> HttpStatus.CONFLICT;
             default -> HttpStatus.BAD_REQUEST;
         };
         return ResponseEntity.status(status)
                 .body(ApiResponse.fail(ex.getCode(), ex.getMessage()));
+    }
+
+    @ExceptionHandler(org.springframework.dao.PessimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Object>> handleLockConflict(
+            org.springframework.dao.PessimisticLockingFailureException ex) {
+        log.warn("Business lock conflict", ex);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(409, "当前操作发生冲突，请先查看订单或购物车状态，再继续操作。"));
     }
 
     @ExceptionHandler(Exception.class)

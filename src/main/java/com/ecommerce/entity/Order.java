@@ -10,7 +10,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Entity
-@Table(name = "orders")
+@Table(name = "orders", uniqueConstraints = @UniqueConstraint(name = "uk_order_user_intent", columnNames = {"user_id", "idempotency_key"}))
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -22,6 +22,12 @@ public class Order {
 
     @Column(nullable = false, unique = true)
     private String orderNo;
+
+    @Column(name = "idempotency_key", length = 128)
+    private String idempotencyKey;
+
+    @Column(name = "request_hash", length = 64)
+    private String requestHash;
 
     @ManyToOne
     @JoinColumn(name = "user_id", nullable = false)

@@ -13,6 +13,12 @@ describe('CartSummary', () => {
     expect(wrapper.text()).toContain('合计 ¥250')
   })
 
+  it('shows zero total after the last item is removed', () => {
+    const wrapper = mount(CartSummary, { props: { items: [] } })
+    expect(wrapper.text()).toContain('合计 ¥0')
+    expect(wrapper.text()).toContain('共 0 件')
+  })
+
   it('labels a partial calculation as known amount', () => {
     const wrapper = mount(CartSummary, {
       props: { items: [{ price: 100, quantity: 2 }, { price: null, quantity: 1 }] },

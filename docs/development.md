@@ -52,39 +52,17 @@ Copy-Item .env.example .env
 .\.venv\Scripts\python.exe -m pytest tests/test_api.py -q
 ```
 
-## 完整 Windows 启动脚本
+## Windows 本地启动
 
 ```powershell
-.\start-local-full.ps1 `
-  -MySqlHost 127.0.0.1 `
-  -MySqlPort 3306 `
-  -BackendPort 8080 `
-  -AgentPort 18000 `
-  -NoBrowser
+.\start-dev-stack.ps1
 ```
 
-主要参数：
+也可双击根目录的 `一键启动Vue.bat`。临时公网演示使用 `一键启动公网.bat`，会构建 Vue 并启动 ngrok；普通本地模式不开放公网。
 
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `MySqlHost` | `127.0.0.1` | MySQL 主机 |
-| `MySqlPort` | `3306` | MySQL 端口 |
-| `MySqlUser` | `root` | 本地开发账号 |
-| `BackendDatabase` | `ecommerce_db` | Java 业务库 |
-| `BackendPort` | `8080` | Java 端口 |
-| `AgentPort` | `18000` | Agent 端口 |
-| `NoDockerMySql` | false | 不使用 Docker MySQL 兜底 |
-| `NoBrowser` | false | 启动后不打开浏览器 |
+服务地址：Vue `http://localhost:5173`、Agent `http://localhost:8000`、Java `http://localhost:8080/api`、MySQL `localhost:3306`。`start-dev-stack.ps1` 支持 `-Mode`、`-PublicDemo`、`-NoBrowser` 和 `-NoPause` 参数；公网快捷命令已自动传入所需参数。
 
-密码也可以作为参数传入，但更推荐放在未跟踪的 `.env` 中，避免出现在终端历史。
-
-停止本地进程：
-
-```powershell
-.\stop-local-full.ps1
-```
-
-运行 PID 和日志保存在 `.run/`，该目录不会进入 Git。
+密码和模型 Key 应放在未跟踪的 `.env` 中。停止时关闭对应的服务窗口；公网模式还要关闭 ngrok 窗口。
 
 ## Agent 环境变量
 

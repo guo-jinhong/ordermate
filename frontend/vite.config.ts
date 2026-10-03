@@ -14,6 +14,7 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
+      '/cart': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/health': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/auth': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/chat': {
@@ -22,6 +23,7 @@ export default defineConfig({
         timeout: 310_000,
         proxyTimeout: 310_000,
       },
+      '/operations': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/confirm': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/conversation': { target: 'http://127.0.0.1:8000', changeOrigin: true },
     },

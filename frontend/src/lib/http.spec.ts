@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { fetchJson, HttpError, normalizeErrorDetail } from './http'
+import { customerErrorMessage, fetchJson, HttpError, normalizeErrorDetail } from './http'
 
 describe('normalizeErrorDetail', () => {
+  it('preserves the warning against replaying an uncertain write', () => {
+    expect(normalizeErrorDetail({ detail: '操作结果待核实，勿重复提交。' }, 504)).toContain('不要重复提交')
+  })
   it('normalizes standard and rate-limit error bodies', () => {
     expect(normalizeErrorDetail({ detail: '登录状态无效' }, 401)).toBe('登录状态无效')
     expect(normalizeErrorDetail({ error: 'rate_limited', detail: '请求过于频繁' }, 429)).toBe(
@@ -17,6 +20,16 @@ describe('normalizeErrorDetail', () => {
         422,
       ),
     ).toBe('message：Field required')
+  })
+
+  it('hides server error details behind a retryable customer message', () => {
+    expect(normalizeErrorDetail({ detail: 'upstream connect failed' }, 502)).toBe(
+      '服务暂时不可用，请稍后重试。',
+    )
+  })
+
+  it('explains a lost network connection without exposing browser error text', () => {
+    expect(customerErrorMessage(new TypeError('Failed to fetch'))).toBe('连接失败，请检查网络后重试。')
   })
 })
 

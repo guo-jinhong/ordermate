@@ -33,7 +33,7 @@ describe('AgentInspector', () => {
     expect(wrapper.text()).toContain('查看我的购物车')
     expect(wrapper.text()).toContain('浏览器观测时长80 ms')
     expect(wrapper.text()).toContain('处理进度')
-    expect(wrapper.text()).toContain('读取购物车')
+    expect(wrapper.text()).toContain('查看购物车')
     expect(wrapper.text()).toContain('[已脱敏]')
     expect(wrapper.text()).not.toContain('get_cart')
     expect(wrapper.text()).not.toContain('secret-token')

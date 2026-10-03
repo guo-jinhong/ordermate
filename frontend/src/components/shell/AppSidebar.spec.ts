@@ -52,7 +52,7 @@ describe('AppSidebar', () => {
 
     expect(session.pendingAction).toBeNull()
     expect(session.isAuthenticated).toBe(true)
-    expect(wrapper.emitted('announce')).toContainEqual(['已取消继续操作，你仍然保持登录状态。'])
+    expect(wrapper.emitted('announce')).toContainEqual(['本次未继续操作，您仍保持登录状态。'])
   })
 
   it('gates protected quick actions and emits close requests', async () => {
@@ -72,19 +72,32 @@ describe('AppSidebar', () => {
     expect(wrapper.emitted('close')).toEqual([[]])
   })
 
-  it('shows and fills the demo login credentials', async () => {
+  it('preserves the conversation until a new chat is confirmed', async () => {
+    const chat = useChatStore()
+    chat.messages = [{ id: 'existing', role: 'user', text: '已有对话', at: Date.now() }]
+    const clear = vi.spyOn(chat, 'clearConversation').mockResolvedValue(true)
+    const wrapper = mount(AppSidebar, { props: { healthStatus: 'online' } })
+    await wrapper.get('.new-chat').trigger('click')
+    expect(clear).not.toHaveBeenCalled()
+    await wrapper.get('.clear-confirm .secondary').trigger('click')
+    expect(clear).not.toHaveBeenCalled()
+    await wrapper.get('.new-chat').trigger('click')
+    await wrapper.get('.clear-confirm .primary').trigger('click')
+    expect(clear).toHaveBeenCalledOnce()
+  })
+
+  it('opens the login panel on demand without publishing credentials', async () => {
     const wrapper = mount(AppSidebar, {
       props: { healthStatus: 'online' },
     })
 
-    expect(wrapper.text()).toContain('体验账号')
-    expect(wrapper.text()).toContain('testuser')
-    expect(wrapper.text()).toContain('password')
-
-    await wrapper.get('.demo-account button').trigger('click')
-
-    expect((wrapper.get('input[autocomplete="username"]').element as HTMLInputElement).value).toBe('testuser')
-    expect((wrapper.get('input[autocomplete="current-password"]').element as HTMLInputElement).value).toBe('password')
-    expect(wrapper.emitted('announce')).toContainEqual(['已填入体验账号，可以直接登录。'])
+    expect(wrapper.text()).toContain('登录后可查看个人购物车与订单')
+    expect(wrapper.text()).not.toContain('testuser')
+    expect(wrapper.text()).not.toContain('password')
+    expect(wrapper.find('input').exists()).toBe(false)
+    await wrapper.get('.account-entry').trigger('click')
+    expect(wrapper.get('.account-entry').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.get('input[autocomplete="username"]').attributes('placeholder')).toBe('请输入用户名')
+    expect(wrapper.get('input[autocomplete="current-password"]').attributes('placeholder')).toBe('请输入密码')
   })
 })

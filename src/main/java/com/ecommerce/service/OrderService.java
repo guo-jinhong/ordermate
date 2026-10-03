@@ -9,6 +9,7 @@ import java.util.List;
 
 public interface OrderService {
     OrderDTO createOrder(Long userId, CreateOrderDTO createOrderDTO);
+    OrderDTO getOrderByIdempotencyKey(Long userId, String idempotencyKey);
     OrderDTO getOrderById(Long orderId);
     OrderDTO getOrderByNo(String orderNo);
     OrderDTO getUserOrderById(Long userId, Long orderId);
