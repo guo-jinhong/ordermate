@@ -17,6 +17,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 # 让 Python 能找到 builder 阶段安装的依赖
 ENV PYTHONPATH=/app/lib/python3.12/site-packages
+# --prefix installs uvicorn and other console scripts under /app/bin.
+ENV PATH="/app/bin:${PATH}"
 
 WORKDIR /app
 
@@ -30,7 +32,9 @@ COPY app/static ./app/static
 EXPOSE 8000
 
 # 非 root 用户运行（安全加固）
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+RUN useradd -m -u 1000 appuser \
+    && mkdir -p /app/data \
+    && chown -R appuser:appuser /app
 USER appuser
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -18,9 +18,28 @@ Redis 是可选外部依赖，默认 Compose 不启动。只有配置 `REDIS_URL
 前置条件：Docker Desktop 或 Linux Docker Engine + Compose v2。
 
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+docker compose up --build -d
 docker compose ps
 ```
+
+Windows 首次构建若无法访问 Docker Hub，可让 Docker Desktop 使用本机已有代理，并在当前终端为构建客户端设置代理（地址以本机实际配置为准）：
+
+```powershell
+$env:HTTP_PROXY = 'http://127.0.0.1:7897'
+$env:HTTPS_PROXY = $env:HTTP_PROXY
+$env:NO_PROXY = 'localhost,127.0.0.1,::1'
+```
+
+内存较少时，逐个构建服务，全部成功后再启动，避免多个构建同时占用内存：
+
+```powershell
+docker compose build backend
+docker compose build agent
+docker compose build frontend
+docker compose up -d --no-build
+```
+
+不要覆盖已有 `.env`；首次运行使用独立 Docker 数据卷，宿主机已有数据库不会自动迁移进容器。端口被已有进程占用时先核对进程归属，或在 `.env` 调整宿主端口。
 
 默认端口：
 

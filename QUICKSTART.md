@@ -26,12 +26,12 @@ docker compose ps
 
 | 服务 | 地址/端口 |
 | --- | --- |
-| 聊天页面 | <http://localhost:8000> |
+| Vue 聊天页面 | <http://localhost:8081> |
 | Agent API 文档 | <http://localhost:8000/docs> |
 | Java API 文档 | <http://localhost:8080/api/doc.html> |
 | MySQL（仅本机调试） | `localhost:3307` |
 
-默认 Compose 只启动 `mysql`、`backend`、`agent`。Redis 是可选能力，默认没有启动。
+默认 Compose 启动 `mysql`、`backend`、`agent`、`frontend`。Redis 是可选能力，默认没有启动。
 
 如果本地 `.env` 修改了 `AGENT_HOST_PORT` 或 `BACKEND_HOST_PORT`，请以 `docker compose ps` 显示的端口为准。
 
